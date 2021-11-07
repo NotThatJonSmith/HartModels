@@ -1,0 +1,14 @@
+name: HartModels
+apps: []
+build-static-lib: true
+build-shared-lib: true
+dependencies:
+    - name: HartKit
+      url: https://github.com/NotThatJonSmith/HartKit.git
+      checkout: main
+private-header-paths:
+    - src/include
+public-header-paths:
+    - include/
+source-globs:
+    - src/*
