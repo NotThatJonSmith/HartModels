@@ -6,6 +6,9 @@ dependencies:
     - name: HartKit
       url: https://github.com/NotThatJonSmith/HartKit.git
       checkout: main
+    - name: Spigot
+      url: https://github.com/NotThatJonSmith/Spigot.git
+      checkout: main
 private-header-paths:
     - src/include
 public-header-paths:
