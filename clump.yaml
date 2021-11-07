@@ -9,6 +9,9 @@ dependencies:
     - name: Spigot
       url: https://github.com/NotThatJonSmith/Spigot.git
       checkout: main
+      clump:
+        public-header-paths:
+            - include
 private-header-paths:
     - src/include
 public-header-paths:
