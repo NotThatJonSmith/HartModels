@@ -9,7 +9,7 @@ dependencies:
     - name: Spigot
       url: https://github.com/NotThatJonSmith/Spigot.git
       checkout: main
-      clump:
+      stella-yaml:
         public-header-paths:
             - include
 private-header-paths:
