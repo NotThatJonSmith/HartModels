@@ -1,3 +1,4 @@
-[submodule "Clumps"]
-	path = Clumps
-	url = git@github.com:NotThatJonSmith/Clumps.git
+[submodule "Stella"]
+	path = Stella
+	url = https://github.com/NotThatJonSmith/Stella.git
+	branch = main
