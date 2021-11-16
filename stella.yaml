@@ -12,6 +12,9 @@ dependencies:
       stella-yaml:
         public-header-paths:
             - include
+    - name: CASK-Devices
+      url: https://github.com/NotThatJonSmith/CASK-Devices.git
+      checkout: main
 private-header-paths:
     - src/include
 public-header-paths:
