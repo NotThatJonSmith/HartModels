@@ -21,3 +21,6 @@ public-header-paths:
     - include/
 source-globs:
     - src/*
+test-globs:
+    - test/src/*
+  
