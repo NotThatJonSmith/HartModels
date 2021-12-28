@@ -16,6 +16,7 @@
 template<
     bool UseFlattenedDecoder,
     bool UseBranchFreeTranslator,
+    bool SkipXLENCheck,
     unsigned int TranslationCacheSizePoT,
     unsigned int CachedDecodedBasicBlocks,
     unsigned int Threads
@@ -76,18 +77,23 @@ public:
     }
 
     inline virtual void Tick() override {
-        switch (state.GetXLEN()) {
-        case RISCV::XlenMode::XL32:
-            Cycle<__uint32_t>();
-            break;
-        case RISCV::XlenMode::XL64:
-            Cycle<__uint64_t>();
-            break;
-        case RISCV::XlenMode::XL128:
-            Cycle<__uint128_t>();
-            break;
-        default:
-            break; // TODO nonsense / fatal
+        fetch.instruction.execute(fetch.operands, &state);
+        if constexpr (SkipXLENCheck) {
+            CurrentXLENFetch();
+        } else {
+            switch (state.GetXLEN()) {
+            case RISCV::XlenMode::XL32:
+                Fetch<__uint32_t>();
+                break;
+            case RISCV::XlenMode::XL64:
+                Fetch<__uint64_t>();
+                break;
+            case RISCV::XlenMode::XL128:
+                Fetch<__uint128_t>();
+                break;
+            default:
+                break; // TODO nonsense / fatal
+            }
         }
     }
 
@@ -107,6 +113,9 @@ private:
     PrecomputedDecoder decoder;
     Translator* translator;
 
+    std::function<void(void)> CurrentXLENFetch;
+
+    // TODO if >1 thread, fetch from ring buffer instead
     template<typename XLEN_t>
     inline void Fetch() {
         
@@ -152,11 +161,20 @@ private:
 
     }
 
-    template<typename XLEN_t>
-    inline void Cycle() {
-        fetch.instruction.execute(fetch.operands, &state);
-        // TODO if >1 thread, fetch from ring buffer instead
-        Fetch<XLEN_t>();
+    void SetFetchFunctionPointer() {
+        switch (state.GetXLEN()) {
+        case RISCV::XlenMode::XL32:
+            CurrentXLENFetch = std::bind(&OptimizedHart::Fetch<__uint32_t>, this);
+            break;
+        case RISCV::XlenMode::XL64:
+            CurrentXLENFetch = std::bind(&OptimizedHart::Fetch<__uint64_t>, this);
+            break;
+        case RISCV::XlenMode::XL128:
+            CurrentXLENFetch = std::bind(&OptimizedHart::Fetch<__uint128_t>, this);
+            break;
+        default:
+            break; // TODO nonsense / fatal
+        }
     }
 
     void PrivilegeChanged() {
@@ -165,6 +183,9 @@ private:
         }
         if constexpr (UseFlattenedDecoder) {
             decoder.Configure(&state);
+        }
+        if constexpr (SkipXLENCheck) {
+            SetFetchFunctionPointer();
         }
     }
 
@@ -175,6 +196,9 @@ private:
         if constexpr (UseFlattenedDecoder) {
             decoder.Configure(&state);
         }
+        if constexpr (SkipXLENCheck) {
+            SetFetchFunctionPointer();
+        }
     }
 
     void SoftwareChangedMSTATUS() {
@@ -183,6 +207,9 @@ private:
         }
         if constexpr (UseFlattenedDecoder) {
             decoder.Configure(&state);
+        }
+        if constexpr (SkipXLENCheck) {
+            SetFetchFunctionPointer();
         }
     }
 

@@ -67,11 +67,4 @@ private:
         fetch.operands = fetch.instruction.getOperands(fetch.encoding);
 
     }
-
-    template<typename XLEN_t>
-    void Cycle() {
-        fetch.instruction.execute(fetch.operands, &state);
-        Fetch<XLEN_t>();
-    }
-
 };

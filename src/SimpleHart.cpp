@@ -24,15 +24,16 @@ void SimpleHart::BeforeFirstTick() {
 }
 
 void SimpleHart::Tick() {
+    fetch.instruction.execute(fetch.operands, &state);
     switch (state.GetXLEN()) {
     case RISCV::XlenMode::XL32:
-        Cycle<__uint32_t>();
+        Fetch<__uint32_t>();
         break;
     case RISCV::XlenMode::XL64:
-        Cycle<__uint64_t>();
+        Fetch<__uint64_t>();
         break;
     case RISCV::XlenMode::XL128:
-        Cycle<__uint128_t>();
+        Fetch<__uint128_t>();
         break;
     default:
         break; // TODO nonsense / fatal
