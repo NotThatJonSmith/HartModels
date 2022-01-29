@@ -38,7 +38,7 @@ void PrecomputedDecoder::Configure(HartState* state) {
 
 Instruction PrecomputedDecoder::Decode(__uint32_t encoded) {
     if (RISCV::isCompressed(encoded)) {
-        return currentLookupTable->compressed[encoded];
+        return currentLookupTable->compressed[encoded & 0x0000ffff];
     }
     return currentLookupTable->uncompressed[Pack(encoded)];
 }

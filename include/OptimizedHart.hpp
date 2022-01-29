@@ -17,6 +17,7 @@ template<
     bool UseFlattenedDecoder,
     bool UseBranchFreeTranslator,
     bool SkipXLENCheck,
+    bool SkipBusForPageTables,
     unsigned int TranslationCacheSizePoT,
     unsigned int CachedDecodedBasicBlocks,
     unsigned int Threads
@@ -25,13 +26,18 @@ class OptimizedHart final : public Hart {
 
 public:
 
-    OptimizedHart(CASK::IOTarget* bus) {
+    OptimizedHart(CASK::IOTarget* bus, CASK::IOTarget* directMem=nullptr) {
+
+        CASK::IOTarget* translatorBus = bus;
+        if constexpr (SkipBusForPageTables) {
+            translatorBus = directMem;
+        }
 
         Translator* uncachedTranslator = nullptr;
         if constexpr (UseBranchFreeTranslator) {
-            uncachedTranslator = new BranchFreeTranslator(bus);
+            uncachedTranslator = new BranchFreeTranslator(translatorBus);
         } else {
-            uncachedTranslator = new NaiveTranslator(bus);
+            uncachedTranslator = new NaiveTranslator(translatorBus);
         }
 
         if constexpr (TranslationCacheSizePoT != 0) {
@@ -143,11 +149,6 @@ private:
 
         // Set the default value of the next virtual PC we will fetch if the instruction doesn't change it
         state.nextFetchVirtualPC->Write<XLEN_t>(vpc + RISCV::instructionLength(fetch.encoding));
-
-        // Mask off the higher bits of compressed instructions
-        if (RISCV::isCompressed(fetch.encoding)) {
-            fetch.encoding &= 0x0000ffff;
-        }
 
         // Decode the instruction
         if constexpr (UseFlattenedDecoder) {
