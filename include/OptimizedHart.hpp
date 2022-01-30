@@ -20,7 +20,7 @@ template<
     bool SkipBusForPageTables,
     unsigned int TranslationCacheSizePoT,
     unsigned int CachedDecodedBasicBlocks,
-    unsigned int Threads
+    unsigned int ThreadedPrefetchDepth
 >
 class OptimizedHart final : public Hart {
 
@@ -69,13 +69,13 @@ public:
         Reset();
         switch (state.GetXLEN()) {
         case RISCV::XlenMode::XL32:
-            Fetch<__uint32_t>();
+            ServeFetch<__uint32_t>(state.currentFetch);
             break;
         case RISCV::XlenMode::XL64:
-            Fetch<__uint64_t>();
+            ServeFetch<__uint64_t>(state.currentFetch);
             break;
         case RISCV::XlenMode::XL128:
-            Fetch<__uint128_t>();
+            ServeFetch<__uint128_t>(state.currentFetch);
             break;
         default:
             break; // TODO nonsense / fatal
@@ -83,19 +83,23 @@ public:
     }
 
     inline virtual void Tick() override {
-        fetch.instruction.execute(fetch.operands, &state);
-        if constexpr (SkipXLENCheck) {
-            CurrentXLENFetch();
+        
+        state.currentFetch->instruction.execute(state.currentFetch->operands, &state);
+
+        if constexpr (ThreadedPrefetchDepth > 1) {
+            state.currentFetch = fetchService.Next();
+        } else if constexpr (SkipXLENCheck) {
+            CurrentXLENFetch(state.currentFetch);
         } else {
             switch (state.GetXLEN()) {
             case RISCV::XlenMode::XL32:
-                Fetch<__uint32_t>();
+                ServeFetch<__uint32_t>(state.currentFetch);
                 break;
             case RISCV::XlenMode::XL64:
-                Fetch<__uint64_t>();
+                ServeFetch<__uint64_t>(state.currentFetch);
                 break;
             case RISCV::XlenMode::XL128:
-                Fetch<__uint128_t>();
+                ServeFetch<__uint128_t>(state.currentFetch);
                 break;
             default:
                 break; // TODO nonsense / fatal
@@ -118,13 +122,14 @@ private:
     HartState::Fetch fetch;
     PrecomputedDecoder decoder;
     Translator* translator;
+    Spigot<HartState::Fetch, ThreadedPrefetchDepth> fetchService;
 
-    std::function<void(void)> CurrentXLENFetch;
+    std::function<void(HartState::Fetch*)> CurrentXLENFetch;
 
     // TODO if >1 thread, fetch from ring buffer instead
     template<typename XLEN_t>
-    inline void Fetch() {
-        
+    inline void ServeFetch(HartState::Fetch* fetch_into) {
+
         XLEN_t vpc;
         bool need_fetch = true;
         while (need_fetch) {
@@ -135,43 +140,43 @@ private:
             vpc = state.nextFetchVirtualPC->Read<XLEN_t>();
 
             // Fill out the virtual PC
-            fetch.virtualPC.Write<XLEN_t>(vpc);
+            fetch_into->virtualPC.Write<XLEN_t>(vpc);
 
             // Fetch the instruction from the MMU
-            TransactionResult transactionResult = state.mmu->Fetch<XLEN_t>(vpc, sizeof(fetch.encoding), (char*)&fetch.encoding);
+            TransactionResult transactionResult = state.mmu->Fetch<XLEN_t>(vpc, sizeof(fetch_into->encoding), (char*)&fetch_into->encoding);
             
             // Raise an exception if the transaction failed - TODO size mismatch / device failure on fetch
             if (transactionResult.trapCause != RISCV::TrapCause::NONE) {
-                state.RaiseException<XLEN_t>(transactionResult.trapCause, fetch.virtualPC.Read<XLEN_t>());
+                state.RaiseException<XLEN_t>(transactionResult.trapCause, fetch_into->virtualPC.Read<XLEN_t>());
                 need_fetch = true;
             }
         }
 
         // Set the default value of the next virtual PC we will fetch if the instruction doesn't change it
-        state.nextFetchVirtualPC->Write<XLEN_t>(vpc + RISCV::instructionLength(fetch.encoding));
+        state.nextFetchVirtualPC->Write<XLEN_t>(vpc + RISCV::instructionLength(fetch_into->encoding));
 
         // Decode the instruction
         if constexpr (UseFlattenedDecoder) {
-            fetch.instruction = decoder.Decode(fetch.encoding);
+            fetch_into->instruction = decoder.Decode(fetch_into->encoding);
         } else {
-            fetch.instruction = decode_full(fetch.encoding, state.extensions, state.mxlen, state.GetXLEN());
+            fetch_into->instruction = decode_full(fetch_into->encoding, state.extensions, state.mxlen, state.GetXLEN());
         }
 
         // Decode the operands
-        fetch.operands = fetch.instruction.getOperands(fetch.encoding);
+        fetch_into->operands = fetch_into->instruction.getOperands(fetch_into->encoding);
 
     }
 
     void SetFetchFunctionPointer() {
         switch (state.GetXLEN()) {
         case RISCV::XlenMode::XL32:
-            CurrentXLENFetch = std::bind(&OptimizedHart::Fetch<__uint32_t>, this);
+            CurrentXLENFetch = std::bind(&OptimizedHart::ServeFetch<__uint32_t>, this, std::placeholders::_1);
             break;
         case RISCV::XlenMode::XL64:
-            CurrentXLENFetch = std::bind(&OptimizedHart::Fetch<__uint64_t>, this);
+            CurrentXLENFetch = std::bind(&OptimizedHart::ServeFetch<__uint64_t>, this, std::placeholders::_1);
             break;
         case RISCV::XlenMode::XL128:
-            CurrentXLENFetch = std::bind(&OptimizedHart::Fetch<__uint128_t>, this);
+            CurrentXLENFetch = std::bind(&OptimizedHart::ServeFetch<__uint128_t>, this, std::placeholders::_1);
             break;
         default:
             break; // TODO nonsense / fatal
