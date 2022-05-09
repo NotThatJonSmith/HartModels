@@ -10,6 +10,13 @@
 #include <MMU.hpp>
 #include <Translator.hpp>
 
+// The heavily-templated version where the algorithm should get inlined and optimized
+template<typename XLEN_t, CASK::AccessType accessType, RISCV::PagingMode currentPagingMode,
+         RISCV::PrivilegeMode translationPrivilege, bool mxrBit, bool sumBit>
+inline Translation<XLEN_t> TranslationTemplate(XLEN_t virt_addr, CASK::IOTarget* bus, XLEN_t root_ppn) {
+    return TranslationAlgorithm<XLEN_t, accessType>(virt_addr, bus, root_ppn, currentPagingMode, translationPrivilege, mxrBit, sumBit);
+}
+
 // There is a lot of C++-fu here, but it's not that complex really. The idea is
 // to remove as much of the branchy code as possible from the RISC-V paged
 // virtual memory address translation algorithm.
@@ -160,7 +167,8 @@ constexpr std::array<InstantiatedTranslationTemplate<__uint64_t>, 216> Translato
 constexpr std::array<InstantiatedTranslationTemplate<__uint128_t>, 216> TranslatorsXL128 = generateTranslatorsForWidth<__uint128_t, 0, 216>();
 
 // With all that out of the way we can implement the MMU API with an added Configure() function
-class BranchFreeTranslator : public Translator {
+template <typename XLEN_t>
+class BranchFreeTranslator final : public Translator<XLEN_t> {
 
 private:
 
@@ -179,7 +187,36 @@ private:
 
 public:
 
-    BranchFreeTranslator(CASK::IOTarget *systemBus);
+    BranchFreeTranslator(CASK::IOTarget *systemBus) {
+        ppnRegister = &state->ppn;
+        unsigned int translatorHash = hashTranslatorParameters(
+            CASK::AccessType::R,
+            state->pagingMode,
+            state->privilegeMode,
+            state->makeExecutableReadable,
+            state->supervisorUserMemoryAccess);
+        translateForRead32 = TranslatorsXL32[translatorHash];
+        translateForRead64 = TranslatorsXL64[translatorHash];
+        translateForRead128 = TranslatorsXL128[translatorHash];
+        translatorHash = hashTranslatorParameters(
+            CASK::AccessType::W,
+            state->pagingMode,
+            state->privilegeMode,
+            state->makeExecutableReadable,
+            state->supervisorUserMemoryAccess);
+        translateForWrite32 = TranslatorsXL32[translatorHash];
+        translateForWrite64 = TranslatorsXL64[translatorHash];
+        translateForWrite128 = TranslatorsXL128[translatorHash];
+        translatorHash = hashTranslatorParameters(
+            CASK::AccessType::X,
+            state->pagingMode,
+            state->privilegeMode,
+            state->makeExecutableReadable,
+            state->supervisorUserMemoryAccess);
+        translateForFetch32 = TranslatorsXL32[translatorHash];
+        translateForFetch64 = TranslatorsXL64[translatorHash];
+        translateForFetch128 = TranslatorsXL128[translatorHash];
+    }
     virtual void Configure(HartState *state) override;
     virtual Translation<__uint32_t> TranslateRead32(__uint32_t address) override;
     virtual Translation<__uint64_t> TranslateRead64(__uint64_t address) override;

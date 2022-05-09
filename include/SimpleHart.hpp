@@ -5,66 +5,65 @@
 
 #include <Hart.hpp>
 
-#include <NaiveTranslator.hpp>
-#include <MMU.hpp>
-#include <RiscVDecoder.hpp>
+#include <Translators/DirectTranslator.hpp>
+#include <Transactors/DirectTransactor.hpp>
+#include <Transactors/TranslatingTransactor.hpp>
+#include <Decoders/DirectDecoder.hpp>
 
-class SimpleHart final : public Hart {
 
-public:
-
-    NaiveTranslator translator;
-    MMU mmu;
-    HartState::Fetch fetch;
+template<typename XLEN_t>
+class SimpleHart final : public Hart<XLEN_t> {
 
 public:
 
-    SimpleHart(CASK::IOTarget* bus);
+    DirectTransactor<XLEN_t> paTransactor;
+    DirectTranslator<XLEN_t> translator;
+    TranslatingTransactor<XLEN_t, true> vaTransactor;
+    DirectDecoder<XLEN_t> decoder;
+    typename HartState<XLEN_t>::Fetch fetch;
+    HartState<XLEN_t> state;
 
-    virtual void BeforeFirstTick() override;
-    virtual void Tick() override;
-    virtual void Reset() override;
+public:
+
+    SimpleHart(CASK::IOTarget* bus, __uint32_t maximalExtensions) :
+        paTransactor(bus),
+        translator(&state, &paTransactor),
+        vaTransactor(&translator, &paTransactor),
+        state(maximalExtensions) {
+        state.currentFetch = &fetch;
+    };
+
+    virtual inline void BeforeFirstTick() override {
+        Reset();
+        FetchInto(&fetch, state.nextFetchVirtualPC);
+    };
+
+    virtual inline void Tick() override {
+        fetch.instruction.execute(fetch.operands, &state);
+        FetchInto(&fetch, state.nextFetchVirtualPC);
+    };
+
+    virtual inline void Reset() override {
+        state.Reset(resetVector);
+    };
 
 private:
 
-    template<typename XLEN_t>
-    void Fetch() {
-        
-        XLEN_t vpc;
+    inline void FetchInto(typename HartState<XLEN_t>::Fetch* fetch_into, XLEN_t pc) {
         bool need_fetch = true;
         while (need_fetch) {
-
             need_fetch = false;
-
-            // Get the next virtual program counter to fetch from
-            vpc = state.nextFetchVirtualPC->Read<XLEN_t>();
-
-            // Fill out the virtual PC
-            fetch.virtualPC.Write<XLEN_t>(vpc);
-
-            // Fetch the instruction from the MMU
-            TransactionResult transactionResult = state.mmu->Fetch<XLEN_t>(vpc, sizeof(fetch.encoding), (char*)&fetch.encoding);
-            
-            // Raise an exception if the transaction failed - TODO size mismatch / device failure on fetch
-            if (transactionResult.trapCause != RISCV::TrapCause::NONE) {
-                state.RaiseException<XLEN_t>(transactionResult.trapCause, fetch.virtualPC.Read<XLEN_t>());
+            fetch_into->virtualPC = pc;
+            Transaction<XLEN_t> transaction = vaTransactor.Fetch(pc, sizeof(fetch_into->encoding), (char*)&fetch_into->encoding);
+            if (transaction.trapCause != RISCV::TrapCause::NONE) {
+                state.RaiseException(transaction.trapCause, fetch_into->virtualPC);
                 need_fetch = true;
             }
+            // if (transaction.size != sizeof(fetch_into->encoding)) // TODO what if?
         }
-
-        // Set the default value of the next virtual PC we will fetch if the instruction doesn't change it
-        state.nextFetchVirtualPC->Write<XLEN_t>(vpc + RISCV::instructionLength(fetch.encoding));
-
-        // Mask off the higher bits of compressed instructions
-        if (RISCV::isCompressed(fetch.encoding)) {
-            fetch.encoding &= 0x0000ffff;
-        }
-
-        // Decode the instruction
-        fetch.instruction = decode_full(fetch.encoding, state.extensions, state.mxlen, state.GetXLEN());
-
-        // Decode the operands
-        fetch.operands = fetch.instruction.getOperands(fetch.encoding);
-
+        fetch_into->instruction = decoder.Decode(fetch_into->encoding);
+        fetch_into->encoding &= fetch_into->instruction.width == 2 ? 0x0000ffff : 0xffffffff; // TODO strictly necessary?
+        fetch_into->operands = fetch_into->instruction.getOperands(fetch_into->encoding);
+        state.nextFetchVirtualPC += fetch_into->instruction.width;
     }
 };

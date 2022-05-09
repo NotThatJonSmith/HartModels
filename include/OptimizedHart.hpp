@@ -9,7 +9,7 @@
 
 #include <PrecomputedDecoder.hpp>
 
-#include <NaiveTranslator.hpp>
+#include <DirectTranslator.hpp>
 #include <BranchFreeTranslator.hpp>
 #include <CacheWrappedTranslator.hpp>
 
@@ -20,7 +20,7 @@ template<
     bool SkipBusForPageTables,
     unsigned int TranslationCacheSizePoT,
     unsigned int CachedDecodedBasicBlocks,
-    unsigned int ThreadedPrefetchDepth
+    unsigned int FetchThreadDepth
 >
 class OptimizedHart final : public Hart {
 
@@ -54,8 +54,12 @@ public:
             decoder.Configure(&state);
         }
 
-        // TODO this gets a prefetching optimization
-        state.currentFetch = &fetch;
+        if constexpr (FetchThreadDepth > 1) {
+            // TODO configure prefetch service
+            // TODO set currentFetch
+        } else {
+            state.currentFetch = &fetch;
+        }
 
         state.notifyPrivilegeChanged = std::bind(&OptimizedHart::PrivilegeChanged, this);
         state.notifySoftwareChangedMISA = std::bind(&OptimizedHart::SoftwareChangedMISA, this);
@@ -86,7 +90,7 @@ public:
         
         state.currentFetch->instruction.execute(state.currentFetch->operands, &state);
 
-        if constexpr (ThreadedPrefetchDepth > 1) {
+        if constexpr (FetchThreadDepth > 1) {
             state.currentFetch = fetchService.Next();
         } else if constexpr (SkipXLENCheck) {
             CurrentXLENFetch(state.currentFetch);
@@ -122,49 +126,66 @@ private:
     HartState::Fetch fetch;
     PrecomputedDecoder decoder;
     Translator* translator;
-    Spigot<HartState::Fetch, ThreadedPrefetchDepth> fetchService;
+    Spigot<HartState::Fetch, FetchThreadDepth> fetchService;
 
     std::function<void(HartState::Fetch*)> CurrentXLENFetch;
 
-    // TODO if >1 thread, fetch from ring buffer instead
     template<typename XLEN_t>
     inline void ServeFetch(HartState::Fetch* fetch_into) {
-
         XLEN_t vpc;
         bool need_fetch = true;
         while (need_fetch) {
-
             need_fetch = false;
-
-            // Get the next virtual program counter to fetch from
-            vpc = state.nextFetchVirtualPC->Read<XLEN_t>();
-
-            // Fill out the virtual PC
+            vpc = state.nextFetchVirtualPC.Read<XLEN_t>();
             fetch_into->virtualPC.Write<XLEN_t>(vpc);
-
-            // Fetch the instruction from the MMU
-            TransactionResult transactionResult = state.mmu->Fetch<XLEN_t>(vpc, sizeof(fetch_into->encoding), (char*)&fetch_into->encoding);
-            
-            // Raise an exception if the transaction failed - TODO size mismatch / device failure on fetch
+            TransactionResult transactionResult = 
+                state.mmu->Fetch<XLEN_t>(vpc, sizeof(fetch_into->encoding), (char*)&fetch_into->encoding);
             if (transactionResult.trapCause != RISCV::TrapCause::NONE) {
                 state.RaiseException<XLEN_t>(transactionResult.trapCause, fetch_into->virtualPC.Read<XLEN_t>());
                 need_fetch = true;
             }
         }
-
-        // Set the default value of the next virtual PC we will fetch if the instruction doesn't change it
-        state.nextFetchVirtualPC->Write<XLEN_t>(vpc + RISCV::instructionLength(fetch_into->encoding));
-
-        // Decode the instruction
+        state.nextFetchVirtualPC.Write<XLEN_t>(vpc + RISCV::instructionLength(fetch_into->encoding));
         if constexpr (UseFlattenedDecoder) {
             fetch_into->instruction = decoder.Decode(fetch_into->encoding);
         } else {
             fetch_into->instruction = decode_full(fetch_into->encoding, state.extensions, state.mxlen, state.GetXLEN());
         }
-
-        // Decode the operands
         fetch_into->operands = fetch_into->instruction.getOperands(fetch_into->encoding);
+    }
 
+    // TODO move the prefetch service out of the Hart class and give it a Configure function, too
+    void ConfigureFetchService() {
+
+        fetchService.Pause();
+
+        // TODO one day, another optimization flag for the cached fetches
+        // for (unsigned int i = 0; i < prefetchCacheSize; i++) {
+        //     prefetchCache[i].valid = false;
+        // }
+
+        RISCV::XlenMode xlen = state.GetXLEN();
+        if (xlen == RISCV::XlenMode::XL32) {
+            fetchService.SetProducer(std::bind(&OptimizedHart::ServeFetch<__uint32_t>, this, std::placeholders::_1));
+        } else if (xlen == RISCV::XlenMode::XL64) {
+            fetchService.SetProducer(std::bind(&OptimizedHart::ServeFetch<__uint64_t>, this, std::placeholders::_1));
+        } else if (xlen == RISCV::XlenMode::XL128) {
+            fetchService.SetProducer(std::bind(&OptimizedHart::ServeFetch<__uint128_t>, this, std::placeholders::_1));
+        } else {
+            // TODO fatal("Starting to fetch code in XLEN mode 'None'!");
+        }
+
+        fetchService.Run();
+    }
+
+    // TODO move the prefetch service out of the Hart class and give it a Flush function, too
+    void FlushPrefetches() {
+        unsigned int offset = RISCV::instructionLength(state.currentFetch->encoding);
+        fetchService.Pause();
+        state.nextFetchVirtualPC.Set<__uint32_t>(state.currentFetch->virtualPC.Read<__uint32_t>() + offset);
+        state.nextFetchVirtualPC.Set<__uint64_t>(state.currentFetch->virtualPC.Read<__uint64_t>() + offset);
+        state.nextFetchVirtualPC.Set<__uint128_t>(state.currentFetch->virtualPC.Read<__uint128_t>() + offset);
+        fetchService.Run();
     }
 
     void SetFetchFunctionPointer() {
@@ -255,38 +276,6 @@ void OptimizedHart::Reset() {
     Reconfigure();
 }
 
-void OptimizedHart::FlushPrefetches() {
-    unsigned int offset = RISCV::instructionLength(state.currentFetch->encoding);
-    fetchService.Pause();
-    state.nextFetchVirtualPC->Set<__uint32_t>(state.currentFetch->virtualPC.Read<__uint32_t>() + offset);
-    state.nextFetchVirtualPC->Set<__uint64_t>(state.currentFetch->virtualPC.Read<__uint64_t>() + offset);
-    state.nextFetchVirtualPC->Set<__uint128_t>(state.currentFetch->virtualPC.Read<__uint128_t>() + offset);
-    fetchService.Run();
-}
 
-void OptimizedHart::Reconfigure() {
-
-    fetchService.Pause();
-
-    for (unsigned int i = 0; i < prefetchCacheSize; i++) {
-        prefetchCache[i].valid = false;
-    }
-
-    RISCV::PrivilegeMode translationPrivilege = state.modifyMemoryPrivilege ? state.machinePreviousPrivilege : state.privilegeMode;
-    RISCV::XlenMode xlen = state.GetXLEN();
-
-    // TODO move the prefetch service out of the Hart class and give it a Configure function, too
-    if (xlen == RISCV::XlenMode::XL32) {
-        fetchService.SetProducer(std::bind(&OptimizedHart::ServePrefetches<__uint32_t>, this, std::placeholders::_1));
-    } else if (xlen == RISCV::XlenMode::XL64) {
-        fetchService.SetProducer(std::bind(&OptimizedHart::ServePrefetches<__uint64_t>, this, std::placeholders::_1));
-    } else if (xlen == RISCV::XlenMode::XL128) {
-        fetchService.SetProducer(std::bind(&OptimizedHart::ServePrefetches<__uint128_t>, this, std::placeholders::_1));
-    } else {
-        // TODO fatal("Starting to fetch code in XLEN mode 'None'!");
-    }
-
-    fetchService.Run();
-}
 
 */
