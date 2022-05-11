@@ -83,7 +83,7 @@ private:
         XLEN_t chunkStartAddress = startAddress;
         while (chunkStartAddress <= endAddress) {
 
-            Translation<XLEN_t> translation = translator->Translate<verb>(chunkStartAddress);
+            Translation<XLEN_t> translation = translator->template Translate<verb>(chunkStartAddress);
 
             XLEN_t chunkEndAddress = translation.validThrough;
             if (chunkEndAddress > endAddress) {
@@ -109,10 +109,10 @@ private:
         result.transferredSize = 0;
         while (!transactionQueue.empty()) {
             BufferedTransaction transaction = transactionQueue.front();
-            transactionQueue.pop_front();
-            XLEN_t successSize = transactor->Transact<verb>(transaction.startAddress, transaction.size, transaction.buf);
-            result.transferredSize += successSize;
-            if (successSize != transaction.size) {
+            transactionQueue.pop();
+            Transaction<XLEN_t> chunkResult = transactor->template Transact<verb>(transaction.startAddress, transaction.size, transaction.buf);
+            result.transferredSize += chunkResult.transferredSize;
+            if (chunkResult.transferredSize != transaction.size) {
                 break;
             }
         }

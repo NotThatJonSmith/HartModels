@@ -39,12 +39,12 @@ public:
     };
 
     virtual inline void Tick() override {
-        fetch.instruction.execute(fetch.operands, &state);
+        fetch.instruction.execute(fetch.operands, &state, &vaTransactor);
         FetchInto(&fetch, state.nextFetchVirtualPC);
     };
 
     virtual inline void Reset() override {
-        state.Reset(resetVector);
+        state.Reset(this->resetVector);
     };
 
 private:

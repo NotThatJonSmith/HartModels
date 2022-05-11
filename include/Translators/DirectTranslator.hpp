@@ -8,8 +8,8 @@ class DirectTranslator final : public Translator<XLEN_t> {
 
 private:
 
-    const HartState<XLEN_t>* state;
-    const Transactor<XLEN_t>* transactor;
+    HartState<XLEN_t>* state;
+    Transactor<XLEN_t>* transactor;
 
 public:
 
