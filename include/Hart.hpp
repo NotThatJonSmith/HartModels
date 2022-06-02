@@ -11,16 +11,13 @@ class Hart : public CASK::Tickable {
 
 public:
 
-    Hart()
-    : state(RISCV::stringToExtensions("imacsu")) // TODO this is a hack to get it to compile
-    { }
+    Hart(__uint32_t maximalExtensions) : state(maximalExtensions) { }
     
     virtual inline void Tick() override = 0;
     virtual inline void BeforeFirstTick() override { }
     virtual inline void Reset() override { }
 
     HartState<XLEN_t> state;
-    Transactor<XLEN_t>* transactor;
     XLEN_t resetVector;
 
 };

@@ -46,7 +46,7 @@ private:
     template <IOVerb verb>
     inline Transaction<XLEN_t> TransactSimple(XLEN_t startAddress, XLEN_t size, char* buf) {
 
-        Translation<XLEN_t> translation = translator->Translate<verb>(startAddress);
+        Translation<XLEN_t> translation = translator->template Translate<verb>(startAddress);
         if (translation.generatedTrap != RISCV::TrapCause::NONE) {
             return { translation.generatedTrap, 0 };
         }
@@ -57,7 +57,7 @@ private:
             size = maxSize;
         }
 
-        return transactor->Transact<verb>(startAddress, size, buf);
+        return transactor->template Transact<verb>(startAddress, size, buf);
     }
 
     template <IOVerb verb>

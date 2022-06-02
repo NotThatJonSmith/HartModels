@@ -14,12 +14,16 @@ private:
 
 public:
 
+    DirectDecoder(HartState<XLEN_t>* hartState) {
+        Configure(hartState);
+    }
+
     void Configure(HartState<XLEN_t>* hartState) override {
         state = hartState;
     }
 
     DecodedInstruction<XLEN_t> Decode(__uint32_t encoded) override {
-        CodePoint codePoint = decode_instruction(encoded, state->extensions, state->mxlen);
+        CodePoint codePoint = decode_instruction(encoded, state->misa.extensions, state->misa.mxlen);
         DecodedInstruction<XLEN_t> decoded = {};
         decoded.disassemble = codePoint.disassemble;
         decoded.getOperands = codePoint.getOperands;

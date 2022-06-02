@@ -45,12 +45,11 @@ private:
         return TranslationAlgorithm<XLEN_t, verb>(
             address,
             transactor,
-            state->ppn,
-            state->pagingMode,
-            state->modifyMemoryPrivilege ? state->machinePreviousPrivilege
-                                         : state->privilegeMode,
-            state->makeExecutableReadable,
-            state->supervisorUserMemoryAccess);
+            state->satp.ppn,
+            state->satp.pagingMode,
+            state->mstatus.mprv ? state->mstatus.mpp : state->privilegeMode,
+            state->mstatus.mxr,
+            state->mstatus.sum);
     }
 
 };
