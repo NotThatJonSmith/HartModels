@@ -57,7 +57,7 @@ private:
             size = maxSize;
         }
 
-        return transactor->template Transact<verb>(startAddress, size, buf);
+        return transactor->template Transact<verb>(translation.translated, size, buf);
     }
 
     template <IOVerb verb>
@@ -85,12 +85,6 @@ private:
 
             Translation<XLEN_t> translation = translator->template Translate<verb>(chunkStartAddress);
 
-            XLEN_t chunkEndAddress = translation.validThrough;
-            if (chunkEndAddress > endAddress) {
-                chunkEndAddress = endAddress;
-            }
-            XLEN_t chunkSize = chunkEndAddress - chunkStartAddress + 1;
-
             result.trapCause = translation.generatedTrap;
             if (result.trapCause != RISCV::TrapCause::NONE) {
                 while (!transactionQueue.empty()) {
@@ -98,6 +92,12 @@ private:
                 }
                 return result;
             }
+
+            XLEN_t chunkEndAddress = translation.validThrough;
+            if (chunkEndAddress > endAddress) {
+                chunkEndAddress = endAddress;
+            }
+            XLEN_t chunkSize = chunkEndAddress - chunkStartAddress + 1;
 
             char* chunkBuf = buf + (chunkStartAddress - startAddress);
             XLEN_t translatedChunkStart = translation.translated + chunkStartAddress - translation.untranslated;
@@ -110,7 +110,8 @@ private:
         while (!transactionQueue.empty()) {
             BufferedTransaction transaction = transactionQueue.front();
             transactionQueue.pop();
-            Transaction<XLEN_t> chunkResult = transactor->template Transact<verb>(transaction.startAddress, transaction.size, transaction.buf);
+            Transaction<XLEN_t> chunkResult =
+                transactor->template Transact<verb>(transaction.startAddress, transaction.size, transaction.buf);
             result.transferredSize += chunkResult.transferredSize;
             if (chunkResult.transferredSize != transaction.size) {
                 break;

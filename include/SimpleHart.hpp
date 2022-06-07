@@ -18,7 +18,7 @@ public:
 
     DirectTransactor<XLEN_t> paTransactor;
     DirectTranslator<XLEN_t> translator;
-    TranslatingTransactor<XLEN_t, false> vaTransactor;
+    TranslatingTransactor<XLEN_t, true> vaTransactor;
     DirectDecoder<XLEN_t> decoder;
     typename HartState<XLEN_t>::Fetch fetch;
 
