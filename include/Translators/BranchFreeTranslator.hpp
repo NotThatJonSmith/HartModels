@@ -1,5 +1,7 @@
 #pragma once
 
+// This is derelict for now. Maybe never worth it?
+
 #include <cstdint>
 #include <type_traits>
 #include <queue>

@@ -7,27 +7,21 @@ class CacheWrappedTranslator : public Translator<XLEN_t> {
 
 private:
 
-    template<typename XLEN_t>
     struct CacheEntry {
         Translation<XLEN_t> translation;
         bool valid;
     };
 
-    const Translator<XLEN_t>* translator;
+    Translator<XLEN_t>* translator;
 
-    CacheEntry<XLEN_t> cacheR[1 << cacheBits];
-    CacheEntry<XLEN_t> cacheW[1 << cacheBits];
-    CacheEntry<XLEN_t> cacheX[1 << cacheBits];
+    CacheEntry cacheR[1 << cacheBits];
+    CacheEntry cacheW[1 << cacheBits];
+    CacheEntry cacheX[1 << cacheBits];
 
 public:
 
     CacheWrappedTranslator(Translator<XLEN_t>* targetTranslator) : translator(targetTranslator) {
         Clear();
-    }
-
-    virtual void Configure(HartState* hartState) override {
-        Clear();
-        translator->Configure(hartState);
     }
 
     virtual inline Translation<XLEN_t> TranslateRead(XLEN_t address) override {
@@ -42,8 +36,6 @@ public:
         return TranslateInternal<IOVerb::Fetch>(address);
     }
 
-private:
-
     void Clear() {
         for (unsigned int i = 0; i < (1 << cacheBits); i++) {
             cacheR[i].valid = false;
@@ -52,10 +44,16 @@ private:
         }
     }
 
+private:
+
     template<IOVerb verb>
     inline Translation<XLEN_t> TranslateInternal(XLEN_t address) {
 
-        CacheEntry<XLEN_t>* cache = cacheX;
+        if constexpr (cacheBits == 0) {
+            return translator->template Translate<verb>(address);
+        }
+
+        CacheEntry* cache = cacheX;
         if constexpr (verb == IOVerb::Read) {
             cache = cacheR;
         } else if constexpr (verb == IOVerb::Write) {
@@ -68,7 +66,7 @@ private:
         XLEN_t residentTag = residentAddress >> (12 + cacheBits);
 
         if (!cache[cacheIndex].valid || cacheTag != residentTag) {
-            cache[cacheIndex].translation = translator->Translate<XLEN_t, verb>(address);
+            cache[cacheIndex].translation = translator->template Translate<verb>(address);
             cache[cacheIndex].valid = true;
         }
         

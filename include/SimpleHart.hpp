@@ -14,7 +14,7 @@
 template<typename XLEN_t>
 class SimpleHart final : public Hart<XLEN_t> {
 
-public:
+private:
 
     DirectTransactor<XLEN_t> paTransactor;
     DirectTranslator<XLEN_t> translator;
@@ -31,7 +31,7 @@ public:
         vaTransactor(&translator, &paTransactor),
         decoder(&this->state) {
         this->state.currentFetch = &fetch;
-        // TODO callback for changing XLENs
+        // TODO callback for changing XLEN!
     };
 
     virtual inline void BeforeFirstTick() override {
@@ -42,7 +42,6 @@ public:
     virtual inline void Tick() override {
         fetch.instruction.execute(fetch.operands, &this->state, &vaTransactor);
         DoFetch();
-        this->state.ServiceInterrupts(); // TODO checking every cycle is wasteful and slow
     };
 
     virtual inline void Reset() override {
@@ -52,6 +51,7 @@ public:
 private:
 
     inline void DoFetch() {
+        // TODO double-fault guard?
         while (true) {
             fetch.virtualPC = this->state.nextFetchVirtualPC;
             Transaction<XLEN_t> transaction = vaTransactor.Fetch(this->state.nextFetchVirtualPC, sizeof(fetch.encoding), (char*)&fetch.encoding);
@@ -63,7 +63,6 @@ private:
             // if (transaction.size != sizeof(fetch.encoding)) // TODO what if?
         }
         fetch.instruction = decoder.Decode(fetch.encoding);
-        fetch.encoding &= fetch.instruction.width == 2 ? 0x0000ffff : 0xffffffff; // TODO strictly necessary?
         fetch.operands = fetch.instruction.getOperands(fetch.encoding);
         this->state.nextFetchVirtualPC += fetch.instruction.width;
     }
