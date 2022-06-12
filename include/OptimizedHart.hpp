@@ -35,9 +35,17 @@ private:
     TranslatingTransactor<XLEN_t, true> busVATransactor;
     TranslatingTransactor<XLEN_t, true> memVATransactor;
     PrecomputedDecoder<XLEN_t> decoder;
+
     typename HartState<XLEN_t>::Fetch fetch;
 
-    Spigot<HartState::Fetch, FetchThreadDepth> fetchService;
+    // Ugh, this is gross:
+    struct FetchFrame {
+        typename HartState<XLEN_t>::Fetch fetch;
+        RISCV::TrapCause deferredTrap;
+    };
+    XLEN_t fetchAheadVPC;
+    FetchFrame* currentFetchFrame;
+    Spigot<FetchFrame, FetchThreadDepth> fetchService;
 
 public:
 
@@ -45,13 +53,19 @@ public:
         Hart<XLEN_t>(maximalExtensions),
         busPATransactor(bus),
         memPATransactor(mem),
-        translator(&this->state, &memPATransactor),
+        translator(&this->state, &memPATransactor), // TODO make optional busPAT
         cachedTranslator(&translator),
         busVATransactor(&cachedTranslator, &busPATransactor),
         memVATransactor(&cachedTranslator, &memPATransactor),
         decoder(&this->state) {
-        this->state.currentFetch = &fetch;
         this->state.implCallback = std::bind(&OptimizedHart::Callback, this, std::placeholders::_1);
+        
+        if constexpr (FetchThreadDepth > 1) {
+            fetchService.SetProducer(std::bind(&OptimizedHart::FetchThread, this, std::placeholders::_1));
+            fetchService.Run();
+        } else {
+            this->state.currentFetch = &fetch;
+        }
         // TODO callback for changing XLENs
     };
 
@@ -62,6 +76,7 @@ public:
 
     virtual inline void Tick() override {
         fetch.instruction.execute(fetch.operands, &this->state, &busVATransactor);
+        // this->state.currentFetch->instruction.execute(this->state.currentFetch->operands, &this->state, &busVATransactor);
         DoFetch();
     };
 
@@ -73,18 +88,67 @@ public:
 
 private:
 
+    inline void FetchThread(FetchFrame* frame) {
+        frame->fetch.virtualPC = fetchAheadVPC;
+        Transaction<XLEN_t> transaction;
+        if constexpr (SkipBusForFetches) {
+            transaction = memVATransactor.Fetch(
+                fetchAheadVPC, 
+                sizeof(frame->fetch.encoding),
+                (char*)&frame->fetch.encoding);
+        } else {
+            transaction = busVATransactor.Fetch(
+                fetchAheadVPC,
+                sizeof(frame->fetch.encoding),
+                (char*)&frame->fetch.encoding);
+        }
+        frame->deferredTrap = transaction.trapCause;
+        // if (transaction.size != sizeof(fetch.encoding)) // TODO what if?
+        if (frame->deferredTrap != RISCV::TrapCause::NONE) {
+            return;
+        }
+        frame->fetch.instruction = decoder.Decode(fetch.encoding);
+        frame->fetch.operands = frame->fetch.instruction.getOperands(fetch.encoding);
+        fetchAheadVPC += frame->fetch.instruction.width;
+    };
+
     inline void DoFetch() {
 
         if constexpr (FetchThreadDepth > 1) {
-            // TODO Spigot-fetching
+            while (true) {
+
+                currentFetchFrame = fetchService.Next();
+                this->state.currentFetch = &currentFetchFrame->fetch;
+
+                if (this->state.currentFetch->virtualPC != this->state.nextFetchVirtualPC) {
+                    fetchService.Pause();
+                    fetchAheadVPC = this->state.nextFetchVirtualPC;
+                    fetchService.Run();
+                    continue;
+                }
+
+                if (currentFetchFrame->deferredTrap != RISCV::TrapCause::NONE) {
+                    this->state.RaiseException(currentFetchFrame->deferredTrap, currentFetchFrame->fetch.virtualPC);
+                    continue;
+                }
+
+                this->state.nextFetchVirtualPC += this->state.currentFetch->instruction.width;
+                break;
+            }
         } else {
             while (true) {
                 fetch.virtualPC = this->state.nextFetchVirtualPC;
                 Transaction<XLEN_t> transaction;
                 if constexpr (SkipBusForFetches) {
-                    transaction = memVATransactor.Fetch(this->state.nextFetchVirtualPC, sizeof(fetch.encoding), (char*)&fetch.encoding);
+                    transaction = memVATransactor.Fetch(
+                        this->state.nextFetchVirtualPC, 
+                        sizeof(fetch.encoding),
+                        (char*)&fetch.encoding);
                 } else {
-                    transaction = busVATransactor.Fetch(this->state.nextFetchVirtualPC, sizeof(fetch.encoding), (char*)&fetch.encoding);
+                    transaction = busVATransactor.Fetch(
+                        this->state.nextFetchVirtualPC,
+                        sizeof(fetch.encoding),
+                        (char*)&fetch.encoding);
                 }
                 if (transaction.trapCause != RISCV::TrapCause::NONE) {
                     this->state.RaiseException(transaction.trapCause, fetch.virtualPC);
