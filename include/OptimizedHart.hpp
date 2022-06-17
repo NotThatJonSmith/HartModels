@@ -75,8 +75,13 @@ public:
     };
 
     virtual inline void Tick() override {
-        fetch.instruction.execute(fetch.operands, &this->state, &busVATransactor);
-        // this->state.currentFetch->instruction.execute(this->state.currentFetch->operands, &this->state, &busVATransactor);
+
+        // ptr-chasing is less performant but needed for thread; makes sense...
+        if constexpr (FetchThreadDepth > 1) {
+            fetch.instruction.execute(fetch.operands, &this->state, &busVATransactor);
+        } else  {
+            this->state.currentFetch->instruction.execute(this->state.currentFetch->operands, &this->state, &busVATransactor);
+        }
         DoFetch();
     };
 
@@ -107,7 +112,7 @@ private:
         if (frame->deferredTrap != RISCV::TrapCause::NONE) {
             return;
         }
-        frame->fetch.instruction = decoder.Decode(fetch.encoding);
+        frame->fetch.instruction = decoder.Decode(frame->fetch.encoding);
         frame->fetch.operands = frame->fetch.instruction.getOperands(fetch.encoding);
         fetchAheadVPC += frame->fetch.instruction.width;
     };
