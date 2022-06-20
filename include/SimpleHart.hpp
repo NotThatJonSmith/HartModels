@@ -20,7 +20,7 @@ private:
     DirectTranslator<XLEN_t> translator;
     TranslatingTransactor<XLEN_t, true> vaTransactor;
     DirectDecoder<XLEN_t> decoder;
-    typename HartState<XLEN_t>::Fetch fetch;
+    FetchedInstruction<XLEN_t> fetch;
 
 public:
 
@@ -30,8 +30,10 @@ public:
         translator(&this->state, &paTransactor),
         vaTransactor(&translator, &paTransactor),
         decoder(&this->state) {
-        this->state.currentFetch = &fetch;
         // TODO callback for changing XLEN!
+
+        this->state.currentFetch = &fetch;
+
     };
 
     virtual inline void BeforeFirstTick() override {
@@ -40,7 +42,10 @@ public:
     };
 
     virtual inline void Tick() override {
-        fetch.instruction.execute(fetch.operands, &this->state, &vaTransactor);
+        fetch.instruction.execute(
+            fetch.operands,
+            &this->state,
+            &vaTransactor);
         DoFetch();
     };
 
