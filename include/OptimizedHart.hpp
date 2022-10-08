@@ -29,7 +29,8 @@ private:
 
     DirectTransactor<XLEN_t> busPATransactor;
     DirectTransactor<XLEN_t> memPATransactor;
-    DirectTranslator<XLEN_t> translator;
+    DirectTranslator<XLEN_t> memTranslator;
+    DirectTranslator<XLEN_t> busTranslator;
     CacheWrappedTranslator<XLEN_t, TranslationCacheSizePoT> cachedTranslator;
     TranslatingTransactor<XLEN_t, true> busVATransactor;
     TranslatingTransactor<XLEN_t, true> memVATransactor;
@@ -42,8 +43,9 @@ public:
         Hart<XLEN_t>(maximalExtensions),
         busPATransactor(bus),
         memPATransactor(mem),
-        translator(&this->state, &memPATransactor), // TODO make optional busPAT
-        cachedTranslator(&translator),
+        busTranslator(&this->state, &busPATransactor),
+        memTranslator(&this->state, &memPATransactor),
+        cachedTranslator(&memTranslator),
         busVATransactor(&cachedTranslator, &busPATransactor),
         memVATransactor(&cachedTranslator, &memPATransactor),
         decoder(&this->state) {

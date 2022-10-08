@@ -25,7 +25,6 @@ public:
     DecodedInstruction<XLEN_t> Decode(__uint32_t encoded) override {
         CodePoint codePoint = decode_instruction(encoded, state->misa.extensions, state->misa.mxlen);
         DecodedInstruction<XLEN_t> decoded = {};
-        decoded.disassemble = codePoint.disassemble;
         decoded.getOperands = codePoint.getOperands;
         decoded.width = codePoint.width;
         if constexpr (std::is_same<XLEN_t, __uint32_t>()) {
