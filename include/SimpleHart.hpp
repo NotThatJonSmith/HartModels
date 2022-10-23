@@ -42,10 +42,7 @@ public:
     };
 
     virtual inline void Tick() override {
-        fetch.instruction.execute(
-            fetch.operands,
-            &this->state,
-            &vaTransactor);
+        fetch.instruction(fetch.encoding, &this->state, &vaTransactor);
         DoFetch();
     };
 
@@ -68,7 +65,6 @@ private:
             // if (transaction.size != sizeof(fetch.encoding)) // TODO what if?
         }
         fetch.instruction = decoder.Decode(fetch.encoding);
-        fetch.operands = fetch.instruction.getOperands(fetch.encoding);
-        this->state.nextFetchVirtualPC += fetch.instruction.width;
+        this->state.nextFetchVirtualPC += RISCV::instructionLength(fetch.encoding);
     }
 };

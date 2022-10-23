@@ -43,8 +43,8 @@ public:
         Hart<XLEN_t>(maximalExtensions),
         busPATransactor(bus),
         memPATransactor(mem),
-        busTranslator(&this->state, &busPATransactor),
         memTranslator(&this->state, &memPATransactor),
+        busTranslator(&this->state, &busPATransactor),
         cachedTranslator(&memTranslator),
         busVATransactor(&cachedTranslator, &busPATransactor),
         memVATransactor(&cachedTranslator, &memPATransactor),
@@ -61,7 +61,7 @@ public:
 
     virtual inline void Tick() override {
         // TODO HartState function?
-        fetch.instruction.execute(fetch.operands, &this->state, &busVATransactor);
+        fetch.instruction(fetch.encoding, &this->state, &busVATransactor);
         DoFetch();
     };
 
@@ -98,8 +98,7 @@ private:
         }
     
         fetch.instruction = decoder.Decode(fetch.encoding);
-        fetch.operands = fetch.instruction.getOperands(fetch.encoding);
-        this->state.nextFetchVirtualPC += fetch.instruction.width;
+        this->state.nextFetchVirtualPC += RISCV::instructionLength(fetch.encoding);
     }
 
     inline void Callback(HartCallbackArgument arg) {

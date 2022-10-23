@@ -68,8 +68,8 @@ public:
 
     virtual inline void Tick() override {
         // TODO HartState function?
-        this->state.currentFetch->instruction.execute(
-            this->state.currentFetch->operands,
+        this->state.currentFetch->instruction(
+            this->state.currentFetch->encoding,
             &this->state,
             &busVATransactor);
         DoFetch();
@@ -135,8 +135,7 @@ private:
         }
         
         this->state.currentFetch->instruction = decoder.Decode(this->state.currentFetch->encoding);
-        this->state.currentFetch->operands = this->state.currentFetch->instruction.getOperands(this->state.currentFetch->encoding);
-        this->state.nextFetchVirtualPC += this->state.currentFetch->instruction.width;
+        this->state.nextFetchVirtualPC += RISCV::instructionLength(this->state.currentFetch->encoding);
     }
 
     inline void Callback(HartCallbackArgument arg) {
