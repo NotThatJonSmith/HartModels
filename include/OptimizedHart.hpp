@@ -11,8 +11,6 @@
 #include <Decoders/PrecomputedDecoder.hpp>
 #include <Translators/CacheWrappedTranslator.hpp>
 
-#include <Spigot.hpp>
-
 
 // TODO accelerated WFI states?
 template<
@@ -32,8 +30,8 @@ private:
     DirectTranslator<XLEN_t> memTranslator;
     DirectTranslator<XLEN_t> busTranslator;
     CacheWrappedTranslator<XLEN_t, TranslationCacheSizePoT> cachedTranslator;
-    TranslatingTransactor<XLEN_t, true> busVATransactor;
-    TranslatingTransactor<XLEN_t, true> memVATransactor;
+    TranslatingTransactor<XLEN_t, false> busVATransactor;
+    TranslatingTransactor<XLEN_t, false> memVATransactor;
     PrecomputedDecoder<XLEN_t> decoder;
     FetchedInstruction<XLEN_t> fetch;
 
@@ -83,6 +81,7 @@ private:
                     this->state.nextFetchVirtualPC, 
                     sizeof(fetch.encoding),
                     (char*)&fetch.encoding);
+                // TODO - make a basic block cache.
             } else {
                 transaction = busVATransactor.Fetch(
                     this->state.nextFetchVirtualPC,
@@ -110,7 +109,7 @@ private:
         // TODO cut out work by giving me old & new MISA values etc?
         if (arg == HartCallbackArgument::ChangedMISA)
             decoder.Configure(&this->state);
-
+        
         return;
     }
 

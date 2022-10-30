@@ -5,8 +5,7 @@
 #include <Transactor.hpp>
 #include <Translator.hpp>
 
-
-template <typename XLEN_t, bool strideAcrossPages>
+template <typename XLEN_t, bool bufferTransactions>
 class TranslatingTransactor final : public Transactor<XLEN_t> {
 
 private:
@@ -36,32 +35,52 @@ private:
 
     template <IOVerb verb>
     inline Transaction<XLEN_t> TransactInternal(XLEN_t startAddress, XLEN_t size, char* buf) {
-        if constexpr (strideAcrossPages) {
-            return TransactStriding<verb>(startAddress, size, buf);
+        if constexpr (bufferTransactions) {
+            return TransactBuffered<verb>(startAddress, size, buf);
         } else {
-            return TransactSimple<verb>(startAddress, size, buf);
+            return TransactImmediate<verb>(startAddress, size, buf);
         }
     }
 
     template <IOVerb verb>
-    inline Transaction<XLEN_t> TransactSimple(XLEN_t startAddress, XLEN_t size, char* buf) {
+    inline Transaction<XLEN_t> TransactImmediate(XLEN_t startAddress, XLEN_t size, char* buf) {
 
-        Translation<XLEN_t> translation = translator->template Translate<verb>(startAddress);
-        if (translation.generatedTrap != RISCV::TrapCause::NONE) {
-            return { translation.generatedTrap, 0 };
+        Transaction<XLEN_t> result;
+        result.trapCause = RISCV::TrapCause::NONE;
+        result.transferredSize = 0;
+
+        XLEN_t endAddress = startAddress + size - 1;
+
+        if (endAddress < startAddress) {
+            return result;
         }
 
-        // TODO is this the spec thing to do?
-        XLEN_t maxSize = translation.validThrough - translation.untranslated + 1;
-        if (maxSize < size) {
-            size = maxSize;
+        XLEN_t chunkStartAddress = startAddress;
+        while (chunkStartAddress <= endAddress) {
+            Translation<XLEN_t> translation = translator->template Translate<verb>(chunkStartAddress);
+            result.trapCause = translation.generatedTrap;
+            if (result.trapCause != RISCV::TrapCause::NONE) {
+                return result;
+            }
+            XLEN_t chunkEndAddress = translation.validThrough;
+            if (chunkEndAddress > endAddress) {
+                chunkEndAddress = endAddress;
+            }
+            XLEN_t chunkSize = chunkEndAddress - chunkStartAddress + 1;
+            char* chunkBuf = buf + (chunkStartAddress - startAddress);
+            XLEN_t translatedChunkStart = translation.translated + chunkStartAddress - translation.untranslated;
+            Transaction<XLEN_t> chunkResult = transactor->template Transact<verb>(translatedChunkStart, chunkSize, chunkBuf);
+            result.transferredSize += chunkResult.transferredSize;
+            if (chunkResult.transferredSize != chunkSize) {
+                return result;
+            }
+            chunkStartAddress += chunkSize;
         }
-
-        return transactor->template Transact<verb>(translation.translated, size, buf);
+        return result;
     }
 
     template <IOVerb verb>
-    inline Transaction<XLEN_t> TransactStriding(XLEN_t startAddress, XLEN_t size, char* buf) {
+    inline Transaction<XLEN_t> TransactBuffered(XLEN_t startAddress, XLEN_t size, char* buf) {
 
         Transaction<XLEN_t> result;
         result.trapCause = RISCV::TrapCause::NONE;
