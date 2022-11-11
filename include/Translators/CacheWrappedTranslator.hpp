@@ -9,7 +9,6 @@ private:
 
     struct CacheEntry {
         Translation<XLEN_t> translation;
-        bool valid;
     };
 
     Translator<XLEN_t>* translator;
@@ -38,9 +37,9 @@ public:
 
     void Clear() {
         for (unsigned int i = 0; i < (1 << cacheBits); i++) {
-            cacheR[i].valid = false;
-            cacheW[i].valid = false;
-            cacheX[i].valid = false;
+            cacheR[i].translation.untranslated = ~(XLEN_t)0;
+            cacheW[i].translation.untranslated = ~(XLEN_t)0;
+            cacheX[i].translation.untranslated = ~(XLEN_t)0;
         }
     }
 
@@ -53,6 +52,10 @@ private:
             return translator->template Translate<verb>(address);
         }
 
+        if (address >> 12 == ~(XLEN_t)0 >> 12) {
+            return translator->template Translate<verb>(address);
+        }
+
         CacheEntry* cache = cacheX;
         if constexpr (verb == IOVerb::Read) {
             cache = cacheR;
@@ -60,27 +63,17 @@ private:
             cache = cacheW;
         }
 
-
-        // XLEN_t cacheIndex = (address >> 12) & ((1 << cacheBits) - 1);
-        // XLEN_t cacheTag = address >> (12 + cacheBits);
-        // XLEN_t residentAddress = cache[cacheIndex].translation.untranslated;
-        // XLEN_t residentTag = residentAddress >> (12 + cacheBits);
-
-        // if (!cache[cacheIndex].valid || cacheTag != residentTag) {
-        //     cache[cacheIndex].translation = translator->template Translate<verb>(address);
-        //     cache[cacheIndex].valid = true;
-        // }
-
-        for (unsigned int cacheReadIndex = 0; cacheReadIndex < (1 << cacheBits); cacheReadIndex++)
-            if (cache[cacheReadIndex].valid &&
-                cache[cacheReadIndex].translation.untranslated <= address &&
-                cache[cacheReadIndex].translation.validThrough > address)
-                return cache[cacheReadIndex].translation;
+        constexpr unsigned int cacheSize = (1 << cacheBits);
         static unsigned int cacheWriteIndex = 0;
         unsigned int cacheReadIndex = cacheWriteIndex;
-        cache[cacheWriteIndex].translation = translator->template Translate<verb>(address);
-        cache[cacheWriteIndex].valid = true;
+        do {
+            if (cache[cacheReadIndex].translation.untranslated >> 12 == address >> 12)
+                return cache[cacheReadIndex].translation;
+            cacheReadIndex = ((int)cacheReadIndex-1) % cacheSize;
+        } while (cacheReadIndex != cacheWriteIndex);
+
         cacheWriteIndex = (cacheWriteIndex + 1) % (1 << cacheBits);
-        return cache[cacheReadIndex].translation;
+        cache[cacheWriteIndex].translation = translator->template Translate<verb>(address);
+        return cache[cacheWriteIndex].translation;
     }
 };
