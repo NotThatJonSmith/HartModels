@@ -60,16 +60,27 @@ private:
             cache = cacheW;
         }
 
-        XLEN_t cacheIndex = (address >> 12) & ((1 << cacheBits) - 1);
-        XLEN_t cacheTag = address >> (12 + cacheBits);
-        XLEN_t residentAddress = cache[cacheIndex].translation.untranslated;
-        XLEN_t residentTag = residentAddress >> (12 + cacheBits);
 
-        if (!cache[cacheIndex].valid || cacheTag != residentTag) {
-            cache[cacheIndex].translation = translator->template Translate<verb>(address);
-            cache[cacheIndex].valid = true;
-        }
-        
-        return cache[cacheIndex].translation;
+        // XLEN_t cacheIndex = (address >> 12) & ((1 << cacheBits) - 1);
+        // XLEN_t cacheTag = address >> (12 + cacheBits);
+        // XLEN_t residentAddress = cache[cacheIndex].translation.untranslated;
+        // XLEN_t residentTag = residentAddress >> (12 + cacheBits);
+
+        // if (!cache[cacheIndex].valid || cacheTag != residentTag) {
+        //     cache[cacheIndex].translation = translator->template Translate<verb>(address);
+        //     cache[cacheIndex].valid = true;
+        // }
+
+        for (unsigned int cacheReadIndex = 0; cacheReadIndex < (1 << cacheBits); cacheReadIndex++)
+            if (cache[cacheReadIndex].valid &&
+                cache[cacheReadIndex].translation.untranslated <= address &&
+                cache[cacheReadIndex].translation.validThrough > address)
+                return cache[cacheReadIndex].translation;
+        static unsigned int cacheWriteIndex = 0;
+        unsigned int cacheReadIndex = cacheWriteIndex;
+        cache[cacheWriteIndex].translation = translator->template Translate<verb>(address);
+        cache[cacheWriteIndex].valid = true;
+        cacheWriteIndex = (cacheWriteIndex + 1) % (1 << cacheBits);
+        return cache[cacheReadIndex].translation;
     }
 };
