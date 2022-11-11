@@ -18,8 +18,6 @@ template<
     unsigned int TranslationCacheSizePoT,
     bool SkipBusForFetches
     // TODO optional (always on right now):  bool SkipBusForPageTables
-    // bool UseBranchFreeTranslator, // Dubious!
-    // unsigned int CachedDecodedBasicBlocks, // not real yet...
 >
 class OptimizedHart final : public Hart<XLEN_t> {
 
@@ -33,7 +31,6 @@ private:
     TranslatingTransactor<XLEN_t, false> busVATransactor;
     TranslatingTransactor<XLEN_t, false> memVATransactor;
     PrecomputedDecoder<XLEN_t> decoder;
-    FetchedInstruction<XLEN_t> fetch;
 
 public:
 
@@ -48,18 +45,16 @@ public:
         memVATransactor(&cachedTranslator, &memPATransactor),
         decoder(&this->state) {
         this->state.implCallback = std::bind(&OptimizedHart::Callback, this, std::placeholders::_1);
-        this->state.currentFetch = &fetch;
         // TODO callback for changing XLENs
     };
 
     virtual inline void BeforeFirstTick() override {
         Reset();
         DoFetch();
-    };
+    }
 
     virtual inline void Tick() override {
-        // TODO HartState function?
-        fetch.instruction(fetch.encoding, &this->state, &busVATransactor);
+        decoder.Decode(this->state.inst)(&this->state, &busVATransactor);
         DoFetch();
     };
 
@@ -74,30 +69,27 @@ private:
     inline void DoFetch() {
 
         while (true) {
-            fetch.virtualPC = this->state.nextFetchVirtualPC;
+            this->state.pc = this->state.nextPC;
             Transaction<XLEN_t> transaction;
             if constexpr (SkipBusForFetches) {
                 transaction = memVATransactor.Fetch(
-                    this->state.nextFetchVirtualPC, 
-                    sizeof(fetch.encoding),
-                    (char*)&fetch.encoding);
-                // TODO - make a basic block cache.
+                    this->state.nextPC,
+                    sizeof(this->state.inst),
+                    (char*)&this->state.inst);
             } else {
                 transaction = busVATransactor.Fetch(
-                    this->state.nextFetchVirtualPC,
-                    sizeof(fetch.encoding),
-                    (char*)&fetch.encoding);
+                    this->state.nextPC,
+                    sizeof(this->state.inst),
+                    (char*)&this->state.inst);
             }
             if (transaction.trapCause != RISCV::TrapCause::NONE) {
-                this->state.RaiseException(transaction.trapCause, fetch.virtualPC);
+                this->state.RaiseException(transaction.trapCause, this->state.pc);
                 continue;
             }
             break;
-            // if (transaction.size != sizeof(fetch.encoding)) // TODO what if?
+            // if (transaction.size != sizeof(this->state.inst)) // TODO what if?
         }
-    
-        fetch.instruction = decoder.Decode(fetch.encoding);
-        this->state.nextFetchVirtualPC += RISCV::instructionLength(fetch.encoding);
+        this->state.nextPC += RISCV::instructionLength(this->state.inst);
     }
 
     inline void Callback(HartCallbackArgument arg) {

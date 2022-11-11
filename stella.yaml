@@ -6,12 +6,6 @@ dependencies:
     - name: HartKit
       url: https://github.com/NotThatJonSmith/HartKit.git
       checkout: main
-    - name: Spigot
-      url: https://github.com/NotThatJonSmith/Spigot.git
-      checkout: main
-      stella-yaml:
-        public-header-paths:
-            - include
     - name: CASK-Devices
       url: https://github.com/NotThatJonSmith/CASK-Devices.git
       checkout: main
