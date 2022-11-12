@@ -51,8 +51,7 @@ private:
     inline void DoFetch() {
         // TODO double-fault guard?
         while (true) {
-            this->state.pc = this->state.nextPC;
-            Transaction<XLEN_t> transaction = vaTransactor.Fetch(this->state.nextPC, sizeof(this->state.inst), (char*)&this->state.inst);
+            Transaction<XLEN_t> transaction = vaTransactor.Fetch(this->state.pc, sizeof(this->state.inst), (char*)&this->state.inst);
             if (transaction.trapCause != RISCV::TrapCause::NONE) {
                 this->state.RaiseException(transaction.trapCause, this->state.pc);
                 continue;
@@ -60,6 +59,5 @@ private:
             break;
             // if (transaction.size != sizeof(this->state.inst)) // TODO what if?
         }
-        this->state.nextPC += RISCV::instructionLength(this->state.inst);
     }
 };
