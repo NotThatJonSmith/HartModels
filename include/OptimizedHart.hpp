@@ -17,7 +17,6 @@ template<
     typename XLEN_t,
     unsigned int TranslationCacheSizePoT,
     bool SkipBusForFetches,
-    unsigned int cachedBasicBlocks,
     unsigned int maxBasicBlockLength,
     unsigned int numNextBlocks
     // TODO optional (always on right now):  bool SkipBusForPageTables
@@ -59,13 +58,12 @@ private:
 
     };
     
-    BasicBlock* RootBBCache[cachedBasicBlocks];
+    BasicBlock* RootBBCache[1 << 15];
     BasicBlock* currentBasicBlock = nullptr;
     bool bbCacheIsWritingBlock = false;
     unsigned int bbCacheBlockWriteCursor = 0;
-    unsigned int bbCacheWriteIndex = 0;
-
     bool trapTakenDuringInstruction = false;
+    static constexpr unsigned int cachedBasicBlocks = 1 << 15; // Tied to the hash alg
 
 public:
 
@@ -97,7 +95,7 @@ public:
 
         trapTakenDuringInstruction = false;
 
-        if (!bbCacheIsWritingBlock) {
+        if (!bbCacheIsWritingBlock) [[likely]] {
 
             if (currentBasicBlock != nullptr) {
                 // Search in the next-block cache. This is the fastest path.
@@ -107,45 +105,40 @@ public:
                     ExecuteBasicBlock(currentBasicBlock);
                     return currentBasicBlock->length;
                 }
-            } // TODO simplify this mess
-
-            // Search every block we know about. This is slow! TODO do we even need to do this?
-            // What if we go to a block that isn't in the next-block cache but *is* somewhere else in the tree?
-            // Does this happen often? Often enough to matter? Maybe duplication isn't a real problem. Or maybe a better
-            // search and evict algorithm set would solve it really well.
-            for (unsigned int i = 0; i < cachedBasicBlocks; i++) {
-                if (RootBBCache[i] != nullptr && RootBBCache[i]->pc == this->state.pc) {
-                    currentBasicBlock = RootBBCache[i];
-                    ExecuteBasicBlock(currentBasicBlock);
-                    return currentBasicBlock->length;
-                }
             }
 
-            // Now we need to open up a new block for writing and put ourselves in write-mode
-            bbCacheWriteIndex = (bbCacheWriteIndex + 1) % cachedBasicBlocks;
+            unsigned int rootCacheIndex = (this->state.pc & 0x0000ffff) >> 1;
+
+            if (RootBBCache[rootCacheIndex] != nullptr && RootBBCache[rootCacheIndex]->pc == this->state.pc) {
+                currentBasicBlock = RootBBCache[rootCacheIndex];
+                ExecuteBasicBlock(currentBasicBlock);
+                return currentBasicBlock->length;
+            }
             
-            if (RootBBCache[bbCacheWriteIndex] != nullptr) {
+            if (RootBBCache[rootCacheIndex] != nullptr) {
                 // Uh oh. Not only erase the block but all references to it in OTHER blocks...
+                // If this starts happening a lot the fix is to add sub-caches under the index to resolve collisions
+                // Another thing to do could be to speed up eviction by maintaining a bit matrix to find referrers faster
                 for (unsigned int i = 0; i < cachedBasicBlocks; i++) {
                     if (RootBBCache[i] == nullptr) {
                         continue;
                     }
                     for (unsigned int j = 0; j < numNextBlocks; j++) {
-                        if (RootBBCache[i]->possibleNextBlocks[j] == RootBBCache[bbCacheWriteIndex]) {
+                        if (RootBBCache[i]->possibleNextBlocks[j] == RootBBCache[rootCacheIndex]) {
                             RootBBCache[i]->possibleNextBlocks[j] = nullptr;
                         }
                     }
                 }
-                delete RootBBCache[bbCacheWriteIndex];
-                RootBBCache[bbCacheWriteIndex] = nullptr;
+                delete RootBBCache[rootCacheIndex];
+                RootBBCache[rootCacheIndex] = nullptr;
             }
 
-            RootBBCache[bbCacheWriteIndex] = new BasicBlock;
+            RootBBCache[rootCacheIndex] = new BasicBlock;
 
             if (currentBasicBlock != nullptr) {
                 for (unsigned int i = 0; i < numNextBlocks; i++) {
                     if (currentBasicBlock->possibleNextBlocks[i] == nullptr) {
-                        currentBasicBlock->possibleNextBlocks[i] = RootBBCache[bbCacheWriteIndex];
+                        currentBasicBlock->possibleNextBlocks[i] = RootBBCache[rootCacheIndex];
                         break;
                     }
                 }
@@ -153,7 +146,7 @@ public:
                 // Oh well, I guess!
             }
 
-            currentBasicBlock = RootBBCache[bbCacheWriteIndex];
+            currentBasicBlock = RootBBCache[rootCacheIndex];
             currentBasicBlock->length = 0;
             currentBasicBlock->pc = this->state.pc;
             bbCacheIsWritingBlock = true;
@@ -168,12 +161,12 @@ public:
             transaction = busVATransactor.Fetch(this->state.pc, sizeof(encoding), (char*)&encoding);
         }
 
-        if (transaction.trapCause == RISCV::TrapCause::NONE) {
-            DecodedInstruction<XLEN_t> instr = decoder.Decode(encoding);
-            currentBasicBlock->instructions[bbCacheBlockWriteCursor++] = { encoding, instr };
+        if (transaction.trapCause == RISCV::TrapCause::NONE) [[likely]] {
+            DecodedInstruction<XLEN_t> decoded = decoder.Decode(encoding);
+            currentBasicBlock->instructions[bbCacheBlockWriteCursor++] = { encoding, decoded };
             currentBasicBlock->length++;
-            bbCacheIsWritingBlock = bbCacheBlockWriteCursor < maxBasicBlockLength && !instructionCanBranch(instr);
-            instr(encoding, &this->state, &busVATransactor);
+            bbCacheIsWritingBlock = bbCacheBlockWriteCursor < maxBasicBlockLength && !instructionCanBranch(decoded);
+            decoded(encoding, &this->state, &busVATransactor);
             return 1;
         } 
 
@@ -191,11 +184,8 @@ public:
 private:
 
     inline void ExecuteBasicBlock(BasicBlock* block) {
-        for (unsigned int i = 0; i < block->length; i++) {
+        for (unsigned int i = 0; i < block->length && !trapTakenDuringInstruction; i++) {
             block->instructions[i].instruction(block->instructions[i].encoding, &this->state, &busVATransactor);
-            if (trapTakenDuringInstruction) { 
-                break;
-            }
         }
     }
 
@@ -207,20 +197,17 @@ private:
             instruction == ex_blt<XLEN_t>     || instruction == ex_bge<XLEN_t>       ||
             instruction == ex_bltu<XLEN_t>    || instruction == ex_bgeu<XLEN_t>      ||
             instruction == ex_fence<XLEN_t>   || instruction == ex_fencei<XLEN_t>    ||
-            instruction == ex_ecall<XLEN_t>   || instruction == ex_ebreak<XLEN_t>    ||
             instruction == ex_uret<XLEN_t>    || instruction == ex_sret<XLEN_t>      ||
             instruction == ex_mret<XLEN_t>    || instruction == ex_sfencevma<XLEN_t> ||
             instruction == ex_cjal<XLEN_t>    || instruction == ex_cj<XLEN_t>        ||
             instruction == ex_cbeqz<XLEN_t>   || instruction == ex_cbnez<XLEN_t>     ||
-            instruction == ex_cjalr<XLEN_t>   || instruction == ex_cjr<XLEN_t>       ||
-            instruction == ex_cebreak<XLEN_t>
+            instruction == ex_cjalr<XLEN_t>   || instruction == ex_cjr<XLEN_t>
         );
     }
 
     inline void ClearBlockCache() {
         bbCacheIsWritingBlock = false;
         bbCacheBlockWriteCursor = 0;
-        bbCacheWriteIndex = 0;
         for (unsigned int i = 0; i < cachedBasicBlocks; i++) {
             if (RootBBCache[i] == nullptr) {
                 continue;
@@ -237,14 +224,20 @@ private:
             return;
         }
 
-        // todo only sometimes
-        cachedTranslator.Clear();
-        ClearBlockCache();
+        // todo be strict about these
+
+        if (arg == HartCallbackArgument::RequestedVMfence)
+            cachedTranslator.Clear();
+
+
+        if (arg == HartCallbackArgument::RequestedIfence || arg == HartCallbackArgument::RequestedVMfence)
+            ClearBlockCache();
 
         // TODO Operating XLEN changing also changes this.
         // TODO cut out work by giving me old & new MISA values etc?
         if (arg == HartCallbackArgument::ChangedMISA)
             decoder.Configure(&this->state);
+            
         return;
     }
 
