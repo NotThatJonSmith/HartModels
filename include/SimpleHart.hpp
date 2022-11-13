@@ -34,12 +34,23 @@ public:
 
     virtual inline void BeforeFirstTick() override {
         Reset();
-        DoFetch();
+        // DoFetch(); // TODO solve first-print problem for good one day
     }
 
     virtual inline unsigned int Tick() override {
-        decoder.Decode(this->state.inst)(&this->state, &vaTransactor);
-        DoFetch();
+
+        __uint32_t encoding = 0;
+        while (true) {
+            Transaction<XLEN_t> transaction = vaTransactor.Fetch(this->state.pc, sizeof(encoding), (char*)&encoding);
+            if (transaction.trapCause != RISCV::TrapCause::NONE) {
+                this->state.RaiseException(transaction.trapCause, this->state.pc);
+                continue;
+            }
+            break;
+            // if (transaction.size != sizeof(encoding)) // TODO what if?
+        }
+
+        decoder.Decode(encoding)(encoding, &this->state, &vaTransactor);
         return 1;
     };
 
@@ -47,18 +58,4 @@ public:
         this->state.Reset(this->resetVector);
     };
 
-private:
-
-    inline void DoFetch() {
-        // TODO double-fault guard?
-        while (true) {
-            Transaction<XLEN_t> transaction = vaTransactor.Fetch(this->state.pc, sizeof(this->state.inst), (char*)&this->state.inst);
-            if (transaction.trapCause != RISCV::TrapCause::NONE) {
-                this->state.RaiseException(transaction.trapCause, this->state.pc);
-                continue;
-            }
-            break;
-            // if (transaction.size != sizeof(this->state.inst)) // TODO what if?
-        }
-    }
 };

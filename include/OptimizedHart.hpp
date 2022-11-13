@@ -87,7 +87,7 @@ public:
         Reset();
 
         // Really just here to pre-warm the disassembly if we're doing that
-        memVATransactor.Fetch(this->state.pc, sizeof(this->state.inst), (char*)&this->state.inst);
+        // memVATransactor.Fetch(this->state.pc, sizeof(this->state.encoded_instruction), (char*)&this->state.encoded_instruction);
         // if (transaction.trapCause != RISCV::TrapCause::NONE) {
             // TODO what if? This is definitely fatal - a trap on the first fetch ever
         // }
@@ -140,7 +140,7 @@ public:
                 RootBBCache[bbCacheWriteIndex] = nullptr;
             }
 
-            RootBBCache[bbCacheWriteIndex] = new BasicBlock; // TODO? sane defaults?
+            RootBBCache[bbCacheWriteIndex] = new BasicBlock;
 
             if (currentBasicBlock != nullptr) {
                 for (unsigned int i = 0; i < numNextBlocks; i++) {
@@ -160,19 +160,20 @@ public:
             bbCacheBlockWriteCursor = 0;
         }
 
+        __uint32_t encoding;
         Transaction<XLEN_t> transaction;
         if constexpr (SkipBusForFetches) {
-            transaction = memVATransactor.Fetch(this->state.pc, sizeof(this->state.inst), (char*)&this->state.inst);
+            transaction = memVATransactor.Fetch(this->state.pc, sizeof(encoding), (char*)&encoding);
         } else {
-            transaction = busVATransactor.Fetch(this->state.pc, sizeof(this->state.inst), (char*)&this->state.inst);
+            transaction = busVATransactor.Fetch(this->state.pc, sizeof(encoding), (char*)&encoding);
         }
 
         if (transaction.trapCause == RISCV::TrapCause::NONE) {
-            DecodedInstruction<XLEN_t> instr = decoder.Decode(this->state.inst);
-            currentBasicBlock->instructions[bbCacheBlockWriteCursor++] = { this->state.inst, instr };
+            DecodedInstruction<XLEN_t> instr = decoder.Decode(encoding);
+            currentBasicBlock->instructions[bbCacheBlockWriteCursor++] = { encoding, instr };
             currentBasicBlock->length++;
             bbCacheIsWritingBlock = bbCacheBlockWriteCursor < maxBasicBlockLength && !instructionCanBranch(instr);
-            instr(&this->state, &busVATransactor);
+            instr(encoding, &this->state, &busVATransactor);
             return 1;
         } 
 
@@ -191,8 +192,7 @@ private:
 
     inline void ExecuteBasicBlock(BasicBlock* block) {
         for (unsigned int i = 0; i < block->length; i++) {
-            this->state.inst = block->instructions[i].encoding;
-            block->instructions[i].instruction(&this->state, &busVATransactor);
+            block->instructions[i].instruction(block->instructions[i].encoding, &this->state, &busVATransactor);
             if (trapTakenDuringInstruction) { 
                 break;
             }
