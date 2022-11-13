@@ -13,7 +13,7 @@ public:
 
     Hart(__uint32_t maximalExtensions) : state(maximalExtensions) { }
     
-    virtual inline void Tick() override = 0;
+    virtual inline unsigned int Tick() override = 0;
     virtual inline void BeforeFirstTick() override { }
     virtual inline void Reset() override { }
 

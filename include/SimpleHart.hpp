@@ -37,9 +37,10 @@ public:
         DoFetch();
     }
 
-    virtual inline void Tick() override {
+    virtual inline unsigned int Tick() override {
         decoder.Decode(this->state.inst)(&this->state, &vaTransactor);
         DoFetch();
+        return 1;
     };
 
     virtual inline void Reset() override {

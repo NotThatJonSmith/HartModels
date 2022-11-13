@@ -18,7 +18,8 @@ template<
     unsigned int TranslationCacheSizePoT,
     bool SkipBusForFetches,
     unsigned int cachedBasicBlocks,
-    unsigned int maxBasicBlockLength
+    unsigned int maxBasicBlockLength,
+    unsigned int numNextBlocks
     // TODO optional (always on right now):  bool SkipBusForPageTables
 >
 class OptimizedHart final : public Hart<XLEN_t> {
@@ -34,21 +35,36 @@ private:
     TranslatingTransactor<XLEN_t, false> memVATransactor;
     PrecomputedDecoder<XLEN_t> decoder;
 
-    struct CachedInstruction {
-        __uint32_t encoding;
-        DecodedInstruction<XLEN_t> instruction;
-    };
+    struct BasicBlock {
 
-    struct CachedBasicBlock {
-        XLEN_t pc;
-        unsigned int length;
+        struct CachedInstruction {
+            __uint32_t encoding = 0;
+            DecodedInstruction<XLEN_t> instruction = nullptr;
+        };
+
+        XLEN_t pc = 0;
+        unsigned int length = 0;
         CachedInstruction instructions[maxBasicBlockLength];
-    };
+        BasicBlock* possibleNextBlocks[numNextBlocks] = { nullptr };
+        
+        BasicBlock* GetNextBlock(XLEN_t blockStartPC) {
+            for (unsigned int i = 0; i < numNextBlocks; i++) {
+                if (possibleNextBlocks[i] != nullptr &&
+                    possibleNextBlocks[i]->pc == blockStartPC) {
+                    return possibleNextBlocks[i];
+                }
+            }
+            return nullptr;
+        }
 
-    CachedBasicBlock BBCache[cachedBasicBlocks];
+    };
+    
+    BasicBlock* RootBBCache[cachedBasicBlocks];
+    BasicBlock* currentBasicBlock = nullptr;
     bool bbCacheIsWritingBlock = false;
     unsigned int bbCacheBlockWriteCursor = 0;
     unsigned int bbCacheWriteIndex = 0;
+
     bool trapTakenDuringInstruction = false;
 
 public:
@@ -77,48 +93,72 @@ public:
         // }
     }
 
-
-    virtual inline void Tick() override {
+    virtual inline unsigned int Tick() override {
 
         trapTakenDuringInstruction = false;
 
-        // If I'm not writing a basic block right now
         if (!bbCacheIsWritingBlock) {
 
-            // Read through the whole basic block cache
-            unsigned int bbCacheReadIndex = bbCacheWriteIndex;
-            do {
+            if (currentBasicBlock != nullptr) {
+                // Search in the next-block cache. This is the fastest path.
+                BasicBlock* nextBlock = currentBasicBlock->GetNextBlock(this->state.pc);
+                if (nextBlock != nullptr) {
+                    currentBasicBlock = nextBlock;
+                    ExecuteBasicBlock(currentBasicBlock);
+                    return currentBasicBlock->length;
+                }
+            } // TODO simplify this mess
 
-                // If I can find a matching PC, just execute the whole BB right now and bail!
-                if (BBCache[bbCacheReadIndex].pc == this->state.pc && BBCache[bbCacheReadIndex].length != 0) {
+            // Search every block we know about. This is slow! TODO do we even need to do this?
+            // What if we go to a block that isn't in the next-block cache but *is* somewhere else in the tree?
+            // Does this happen often? Often enough to matter? Maybe duplication isn't a real problem. Or maybe a better
+            // search and evict algorithm set would solve it really well.
+            for (unsigned int i = 0; i < cachedBasicBlocks; i++) {
+                if (RootBBCache[i] != nullptr && RootBBCache[i]->pc == this->state.pc) {
+                    currentBasicBlock = RootBBCache[i];
+                    ExecuteBasicBlock(currentBasicBlock);
+                    return currentBasicBlock->length;
+                }
+            }
 
-                    for (unsigned int i = 0; i < BBCache[bbCacheReadIndex].length; i++) {
-
-                        this->state.inst = BBCache[bbCacheReadIndex].instructions[i].encoding;
-                        BBCache[bbCacheReadIndex].instructions[i].instruction(&this->state, &busVATransactor);
-                        if (trapTakenDuringInstruction) {
-                            break;
+            // Now we need to open up a new block for writing and put ourselves in write-mode
+            bbCacheWriteIndex = (bbCacheWriteIndex + 1) % cachedBasicBlocks;
+            
+            if (RootBBCache[bbCacheWriteIndex] != nullptr) {
+                // Uh oh. Not only erase the block but all references to it in OTHER blocks...
+                for (unsigned int i = 0; i < cachedBasicBlocks; i++) {
+                    if (RootBBCache[i] == nullptr) {
+                        continue;
+                    }
+                    for (unsigned int j = 0; j < numNextBlocks; j++) {
+                        if (RootBBCache[i]->possibleNextBlocks[j] == RootBBCache[bbCacheWriteIndex]) {
+                            RootBBCache[i]->possibleNextBlocks[j] = nullptr;
                         }
                     }
-                    return;
                 }
+                delete RootBBCache[bbCacheWriteIndex];
+                RootBBCache[bbCacheWriteIndex] = nullptr;
+            }
 
-                // Reading backward from a ring buffer that we write forward into is a cheap pseudo LRU
-                bbCacheReadIndex = ((int)bbCacheReadIndex-1) % cachedBasicBlocks;
+            RootBBCache[bbCacheWriteIndex] = new BasicBlock; // TODO? sane defaults?
 
-            } while (bbCacheReadIndex != bbCacheWriteIndex);
-        }
+            if (currentBasicBlock != nullptr) {
+                for (unsigned int i = 0; i < numNextBlocks; i++) {
+                    if (currentBasicBlock->possibleNextBlocks[i] == nullptr) {
+                        currentBasicBlock->possibleNextBlocks[i] = RootBBCache[bbCacheWriteIndex];
+                        break;
+                    }
+                }
+                // TODO what if we get here and can't have connected the block?
+                // Oh well, I guess!
+            }
 
-        // If we're not writing a basic block right now, but we don't have this PC in the cache, we open a block:
-        if (!bbCacheIsWritingBlock) {
-            bbCacheWriteIndex = (bbCacheWriteIndex + 1) % cachedBasicBlocks;
+            currentBasicBlock = RootBBCache[bbCacheWriteIndex];
+            currentBasicBlock->length = 0;
+            currentBasicBlock->pc = this->state.pc;
             bbCacheIsWritingBlock = true;
             bbCacheBlockWriteCursor = 0;
-            BBCache[bbCacheWriteIndex].length = 0;
-            BBCache[bbCacheWriteIndex].pc = this->state.pc;
         }
-
-        // Now we are definitely executing one-by-one and writing down what we do in the BB cache!
 
         Transaction<XLEN_t> transaction;
         if constexpr (SkipBusForFetches) {
@@ -129,17 +169,15 @@ public:
 
         if (transaction.trapCause == RISCV::TrapCause::NONE) {
             DecodedInstruction<XLEN_t> instr = decoder.Decode(this->state.inst);
-            BBCache[bbCacheWriteIndex].instructions[bbCacheBlockWriteCursor].encoding = this->state.inst;
-            BBCache[bbCacheWriteIndex].instructions[bbCacheBlockWriteCursor].instruction = instr;
-            BBCache[bbCacheWriteIndex].length++;
-            bbCacheBlockWriteCursor++;
-            if (bbCacheBlockWriteCursor == maxBasicBlockLength || instructionCanBranch(instr)) {
-                bbCacheIsWritingBlock = false;
-            }
+            currentBasicBlock->instructions[bbCacheBlockWriteCursor++] = { this->state.inst, instr };
+            currentBasicBlock->length++;
+            bbCacheIsWritingBlock = bbCacheBlockWriteCursor < maxBasicBlockLength && !instructionCanBranch(instr);
             instr(&this->state, &busVATransactor);
-        } else {
-            this->state.RaiseException(transaction.trapCause, this->state.pc);
-        }
+            return 1;
+        } 
+
+        this->state.RaiseException(transaction.trapCause, this->state.pc);
+        return 1;
     };
 
     virtual inline void Reset() override {
@@ -151,31 +189,30 @@ public:
 
 private:
 
+    inline void ExecuteBasicBlock(BasicBlock* block) {
+        for (unsigned int i = 0; i < block->length; i++) {
+            this->state.inst = block->instructions[i].encoding;
+            block->instructions[i].instruction(&this->state, &busVATransactor);
+            if (trapTakenDuringInstruction) { 
+                break;
+            }
+        }
+    }
+
     static inline bool instructionCanBranch(DecodedInstruction<XLEN_t> instruction) {
-        // TODO, maybe some of these aren't 100% necessary
+        // TODO, maybe some of these aren't 100% necessarily basic-block-breakers
         return (
-            instruction == ex_jal<XLEN_t> ||
-            instruction == ex_jalr<XLEN_t> ||
-            instruction == ex_beq<XLEN_t> ||
-            instruction == ex_bne<XLEN_t> ||
-            instruction == ex_blt<XLEN_t> ||
-            instruction == ex_bge<XLEN_t> ||
-            instruction == ex_bltu<XLEN_t> ||
-            instruction == ex_bgeu<XLEN_t> ||
-            instruction == ex_fence<XLEN_t> ||
-            instruction == ex_fencei<XLEN_t> ||
-            instruction == ex_ecall<XLEN_t> ||
-            instruction == ex_ebreak<XLEN_t> ||
-            instruction == ex_uret<XLEN_t> ||
-            instruction == ex_sret<XLEN_t> ||
-            instruction == ex_mret<XLEN_t> ||
-            instruction == ex_sfencevma<XLEN_t> ||
-            instruction == ex_cjal<XLEN_t> ||
-            instruction == ex_cj<XLEN_t> ||
-            instruction == ex_cbeqz<XLEN_t> ||
-            instruction == ex_cbnez<XLEN_t> ||
-            instruction == ex_cjalr<XLEN_t> ||
-            instruction == ex_cjr<XLEN_t> ||
+            instruction == ex_jal<XLEN_t>     || instruction == ex_jalr<XLEN_t>      ||
+            instruction == ex_beq<XLEN_t>     || instruction == ex_bne<XLEN_t>       ||
+            instruction == ex_blt<XLEN_t>     || instruction == ex_bge<XLEN_t>       ||
+            instruction == ex_bltu<XLEN_t>    || instruction == ex_bgeu<XLEN_t>      ||
+            instruction == ex_fence<XLEN_t>   || instruction == ex_fencei<XLEN_t>    ||
+            instruction == ex_ecall<XLEN_t>   || instruction == ex_ebreak<XLEN_t>    ||
+            instruction == ex_uret<XLEN_t>    || instruction == ex_sret<XLEN_t>      ||
+            instruction == ex_mret<XLEN_t>    || instruction == ex_sfencevma<XLEN_t> ||
+            instruction == ex_cjal<XLEN_t>    || instruction == ex_cj<XLEN_t>        ||
+            instruction == ex_cbeqz<XLEN_t>   || instruction == ex_cbnez<XLEN_t>     ||
+            instruction == ex_cjalr<XLEN_t>   || instruction == ex_cjr<XLEN_t>       ||
             instruction == ex_cebreak<XLEN_t>
         );
     }
@@ -185,12 +222,11 @@ private:
         bbCacheBlockWriteCursor = 0;
         bbCacheWriteIndex = 0;
         for (unsigned int i = 0; i < cachedBasicBlocks; i++) {
-            BBCache[i].pc = 0;
-            BBCache[i].length = 0;
-            for (unsigned int j = 0; j < maxBasicBlockLength; j++) {
-                BBCache[i].instructions[j].encoding = 0;
-                BBCache[i].instructions[j].instruction = nullptr;
+            if (RootBBCache[i] == nullptr) {
+                continue;
             }
+            delete RootBBCache[i];
+            RootBBCache[i] = nullptr;
         }
     }
 
