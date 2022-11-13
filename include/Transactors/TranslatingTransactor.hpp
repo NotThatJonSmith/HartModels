@@ -45,22 +45,17 @@ private:
     template <IOVerb verb>
     inline Transaction<XLEN_t> TransactImmediate(XLEN_t startAddress, XLEN_t size, char* buf) {
 
-        Transaction<XLEN_t> result;
-        result.trapCause = RISCV::TrapCause::NONE;
-        result.transferredSize = 0;
-
         XLEN_t endAddress = startAddress + size - 1;
-
         if (endAddress < startAddress) {
-            return result;
+            return { RISCV::TrapCause::NONE, 0 };
         }
 
+        // TODO this function is the hot spot, and this page-striding behavior seems pointless.
         XLEN_t chunkStartAddress = startAddress;
         while (chunkStartAddress <= endAddress) {
             Translation<XLEN_t> translation = translator->template Translate<verb>(chunkStartAddress);
-            result.trapCause = translation.generatedTrap;
-            if (result.trapCause != RISCV::TrapCause::NONE) {
-                return result;
+            if (translation.generatedTrap != RISCV::TrapCause::NONE) [[unlikely]] {
+                return { translation.generatedTrap, 0 };
             }
             XLEN_t chunkEndAddress = translation.validThrough;
             if (chunkEndAddress > endAddress) {
@@ -70,13 +65,12 @@ private:
             char* chunkBuf = buf + (chunkStartAddress - startAddress);
             XLEN_t translatedChunkStart = translation.translated + chunkStartAddress - translation.untranslated;
             Transaction<XLEN_t> chunkResult = transactor->template Transact<verb>(translatedChunkStart, chunkSize, chunkBuf);
-            result.transferredSize += chunkResult.transferredSize;
-            if (chunkResult.transferredSize != chunkSize) {
-                return result;
+            if (chunkResult.transferredSize != chunkSize) [[unlikely]] {
+                return chunkResult;
             }
             chunkStartAddress += chunkSize;
         }
-        return result;
+        return { RISCV::TrapCause::NONE, size };
     }
 
     template <IOVerb verb>
