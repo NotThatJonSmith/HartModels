@@ -50,6 +50,7 @@ private:
             return { RISCV::TrapCause::NONE, 0 };
         }
 
+        // TODO most of these will end up in mem, not bus. Can we cache an offset into the memory array and go faster?
         // TODO this function is the hot spot, and this page-striding behavior seems pointless.
         XLEN_t chunkStartAddress = startAddress;
         while (chunkStartAddress <= endAddress) {

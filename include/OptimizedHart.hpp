@@ -44,6 +44,7 @@ private:
         XLEN_t pc = 0;
         unsigned int length = 0;
         CachedInstruction instructions[maxBasicBlockLength];
+
         BasicBlock* possibleNextBlocks[numNextBlocks] = { nullptr };
         
         BasicBlock* GetNextBlock(XLEN_t blockStartPC) {
@@ -110,6 +111,16 @@ public:
             unsigned int rootCacheIndex = (this->state.pc & 0x0000ffff) >> 1;
 
             if (RootBBCache[rootCacheIndex] != nullptr && RootBBCache[rootCacheIndex]->pc == this->state.pc) {
+                if (currentBasicBlock != nullptr) {
+                    for (unsigned int i = 0; i < numNextBlocks; i++) {
+                        if (currentBasicBlock->possibleNextBlocks[i] == nullptr) {
+                            currentBasicBlock->possibleNextBlocks[i] = RootBBCache[rootCacheIndex];
+                            break;
+                        }
+                    }
+                    // TODO what if we get here and can't have connected the block?
+                    // Oh well, I guess!
+                }
                 currentBasicBlock = RootBBCache[rootCacheIndex];
                 ExecuteBasicBlock(currentBasicBlock);
                 return currentBasicBlock->length;
@@ -184,6 +195,7 @@ public:
 private:
 
     inline void ExecuteBasicBlock(BasicBlock* block) {
+        // TODO maybe pick up speed by modeling trapTakenDuringInstruction with C++ try/catch instead of a flag to check
         for (unsigned int i = 0; i < block->length && !trapTakenDuringInstruction; i++) {
             block->instructions[i].instruction(block->instructions[i].encoding, &this->state, &busVATransactor);
         }
@@ -191,6 +203,7 @@ private:
 
     static inline bool instructionCanBranch(DecodedInstruction<XLEN_t> instruction) {
         // TODO, maybe some of these aren't 100% necessarily basic-block-breakers
+        // TODO perf: this check can be abolished if there is a hart callback for "I might branch" or some other slickness
         return (
             instruction == ex_jal<XLEN_t>     || instruction == ex_jalr<XLEN_t>      ||
             instruction == ex_beq<XLEN_t>     || instruction == ex_bne<XLEN_t>       ||
@@ -224,7 +237,7 @@ private:
             return;
         }
 
-        // todo be strict about these
+        // TODO be strict about these
 
         if (arg == HartCallbackArgument::RequestedVMfence)
             cachedTranslator.Clear();
