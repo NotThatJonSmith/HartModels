@@ -80,17 +80,8 @@ public:
         decoder(&this->state) {
         this->state.implCallback = std::bind(&OptimizedHart::Callback, this, std::placeholders::_1);
         // TODO callback for changing XLENs
-    };
-
-    virtual inline void BeforeFirstTick() override {
         Reset();
-
-        // Really just here to pre-warm the disassembly if we're doing that
-        // memVATransactor.Fetch(this->state.pc, sizeof(this->state.encoded_instruction), (char*)&this->state.encoded_instruction);
-        // if (transaction.trapCause != RISCV::TrapCause::NONE) {
-            // TODO what if? This is definitely fatal - a trap on the first fetch ever
-        // }
-    }
+    };
 
     virtual inline unsigned int Tick() override {
 
@@ -191,6 +182,10 @@ public:
         decoder.Configure(&this->state);
         ClearBlockCache();
     };
+
+    virtual inline Transactor<XLEN_t>* getVATransactor() override {
+        return &busVATransactor;
+    }
 
 private:
 

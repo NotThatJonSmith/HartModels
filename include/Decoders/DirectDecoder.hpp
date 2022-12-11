@@ -21,7 +21,7 @@ public:
     }
 
     DecodedInstruction<XLEN_t> Decode(__uint32_t encoded) override {
-        return decode_instruction<XLEN_t>(encoded, state->misa.extensions, state->misa.mxlen);
+        return decode_instruction<XLEN_t>(encoded, state->misa.extensions, state->misa.mxlen).executionFunction;
     }
 
 };

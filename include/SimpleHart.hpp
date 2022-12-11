@@ -30,12 +30,8 @@ public:
         vaTransactor(&translator, &paTransactor),
         decoder(&this->state) {
         // TODO callback for changing XLEN!
-    };
-
-    virtual inline void BeforeFirstTick() override {
         Reset();
-        // DoFetch(); // TODO solve first-print problem for good one day
-    }
+    };
 
     virtual inline unsigned int Tick() override {
 
@@ -57,5 +53,9 @@ public:
     virtual inline void Reset() override {
         this->state.Reset(this->resetVector);
     };
+
+    virtual inline Transactor<XLEN_t>* getVATransactor() override {
+        return &vaTransactor;
+    }
 
 };
