@@ -18,7 +18,8 @@ template<
     unsigned int TranslationCacheSizePoT,
     bool SkipBusForFetches,
     unsigned int maxBasicBlockLength,
-    unsigned int numNextBlocks
+    unsigned int numNextBlocks,
+    unsigned int bbCacheSizePoT
     // TODO optional (always on right now):  bool SkipBusForPageTables
 >
 class OptimizedHart final : public Hart<XLEN_t> {
@@ -59,12 +60,11 @@ private:
 
     };
     
-    BasicBlock* RootBBCache[1 << 15];
+    static constexpr unsigned int cachedBasicBlocks = 1 << bbCacheSizePoT; // Tied to the hash alg
+    BasicBlock* RootBBCache[cachedBasicBlocks];
     BasicBlock* currentBasicBlock = nullptr;
     bool bbCacheIsWritingBlock = false;
-    unsigned int bbCacheBlockWriteCursor = 0;
     bool trapTakenDuringInstruction = false;
-    static constexpr unsigned int cachedBasicBlocks = 1 << 15; // Tied to the hash alg
 
 public:
 
@@ -99,8 +99,7 @@ public:
                 }
             }
 
-            unsigned int rootCacheIndex = (this->state.pc & 0x0000ffff) >> 1;
-
+            unsigned int rootCacheIndex = (this->state.pc >> 1) & ((1 << bbCacheSizePoT) - 1);
             if (RootBBCache[rootCacheIndex] != nullptr && RootBBCache[rootCacheIndex]->pc == this->state.pc) {
                 if (currentBasicBlock != nullptr) {
                     for (unsigned int i = 0; i < numNextBlocks; i++) {
@@ -152,7 +151,6 @@ public:
             currentBasicBlock->length = 0;
             currentBasicBlock->pc = this->state.pc;
             bbCacheIsWritingBlock = true;
-            bbCacheBlockWriteCursor = 0;
         }
 
         __uint32_t encoding;
@@ -165,9 +163,8 @@ public:
 
         if (transaction.trapCause == RISCV::TrapCause::NONE) [[likely]] {
             DecodedInstruction<XLEN_t> decoded = decoder.Decode(encoding);
-            currentBasicBlock->instructions[bbCacheBlockWriteCursor++] = { encoding, decoded };
-            currentBasicBlock->length++;
-            bbCacheIsWritingBlock = bbCacheBlockWriteCursor < maxBasicBlockLength && !instructionCanBranch(decoded);
+            currentBasicBlock->instructions[currentBasicBlock->length++] = { encoding, decoded };
+            bbCacheIsWritingBlock = currentBasicBlock->length < maxBasicBlockLength && !instructionCanBranch(decoded);
             decoded(encoding, &this->state, &busVATransactor);
             return 1;
         } 
@@ -215,7 +212,6 @@ private:
 
     inline void ClearBlockCache() {
         bbCacheIsWritingBlock = false;
-        bbCacheBlockWriteCursor = 0;
         for (unsigned int i = 0; i < cachedBasicBlocks; i++) {
             if (RootBBCache[i] == nullptr) {
                 continue;
@@ -236,7 +232,6 @@ private:
 
         if (arg == HartCallbackArgument::RequestedVMfence)
             cachedTranslator.Clear();
-
 
         if (arg == HartCallbackArgument::RequestedIfence || arg == HartCallbackArgument::RequestedVMfence)
             ClearBlockCache();
