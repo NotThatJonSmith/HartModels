@@ -197,13 +197,18 @@ private:
         // TODO, maybe some of these aren't 100% necessarily basic-block-breakers
         // TODO perf: this check can be abolished if there is a hart callback for "I might branch" or some other slickness
         return (
-            instruction == ex_jal<XLEN_t>     || instruction == ex_jalr<XLEN_t>      ||
-            instruction == ex_beq<XLEN_t>     || instruction == ex_bne<XLEN_t>       ||
-            instruction == ex_blt<XLEN_t>     || instruction == ex_bge<XLEN_t>       ||
-            instruction == ex_bltu<XLEN_t>    || instruction == ex_bgeu<XLEN_t>      ||
-            instruction == ex_fence<XLEN_t>   || instruction == ex_fencei<XLEN_t>    ||
-            instruction == ex_uret<XLEN_t>    || instruction == ex_sret<XLEN_t>      ||
-            instruction == ex_mret<XLEN_t>    || instruction == ex_sfencevma<XLEN_t> ||
+            instruction == ex_jal<XLEN_t>     || instruction == ex_jalr<XLEN_t>         ||
+            instruction == ex_fence<XLEN_t>   || instruction == ex_fencei<XLEN_t>       ||
+            instruction == ex_sfencevma<XLEN_t> ||
+            instruction == ex_branch_generic<XLEN_t, std::equal_to<XLEN_t>>      ||
+            instruction == ex_branch_generic<XLEN_t, std::not_equal_to<XLEN_t>>  ||
+            instruction == ex_branch_generic<XLEN_t, std::less<XLEN_t>>           ||
+            instruction == ex_branch_generic<XLEN_t, std::greater_equal<XLEN_t>>  ||
+            instruction == ex_branch_generic<XLEN_t, std::less<std::make_signed_t<XLEN_t>>>          ||
+            instruction == ex_branch_generic<XLEN_t, std::greater_equal<std::make_signed_t<XLEN_t>>> ||
+            instruction == ex_trap_return<XLEN_t, RISCV::PrivilegeMode::Machine> ||
+            instruction == ex_trap_return<XLEN_t, RISCV::PrivilegeMode::Supervisor> ||
+            instruction == ex_trap_return<XLEN_t, RISCV::PrivilegeMode::User> ||
             instruction == ex_cjal<XLEN_t>    || instruction == ex_cj<XLEN_t>        ||
             instruction == ex_cbeqz<XLEN_t>   || instruction == ex_cbnez<XLEN_t>     ||
             instruction == ex_cjalr<XLEN_t>   || instruction == ex_cjr<XLEN_t>
