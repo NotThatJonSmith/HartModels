@@ -37,6 +37,7 @@ public:
 
     void Clear() {
         for (unsigned int i = 0; i < (1 << cacheBits); i++) {
+            // TODO I think this is not strictly correct
             cacheR[i].translation.untranslated = ~(XLEN_t)0;
             cacheW[i].translation.untranslated = ~(XLEN_t)0;
             cacheX[i].translation.untranslated = ~(XLEN_t)0;
@@ -47,33 +48,15 @@ private:
 
     template<IOVerb verb>
     inline Translation<XLEN_t> TranslateInternal(XLEN_t address) {
-
-        if constexpr (cacheBits == 0) {
-            return translator->template Translate<verb>(address);
-        }
-
-        if (address >> 12 == ~(XLEN_t)0 >> 12) {
-            return translator->template Translate<verb>(address);
-        }
-
         CacheEntry* cache = cacheX;
         if constexpr (verb == IOVerb::Read) {
             cache = cacheR;
         } else if constexpr (verb == IOVerb::Write) {
             cache = cacheW;
         }
-
-        constexpr unsigned int cacheSize = (1 << cacheBits);
-        static unsigned int cacheWriteIndex = 0;
-        unsigned int cacheReadIndex = cacheWriteIndex;
-        do {
-            if (cache[cacheReadIndex].translation.untranslated >> 12 == address >> 12)
-                return cache[cacheReadIndex].translation;
-            cacheReadIndex = ((int)cacheReadIndex-1) % cacheSize;
-        } while (cacheReadIndex != cacheWriteIndex);
-
-        cacheWriteIndex = (cacheWriteIndex + 1) % (1 << cacheBits);
-        cache[cacheWriteIndex].translation = translator->template Translate<verb>(address);
-        return cache[cacheWriteIndex].translation;
+        unsigned int index = (address >> 12) & ((1 << cacheBits) - 1);
+        if (cache[index].translation.untranslated >> 12 != address >> 12) [[ unlikely ]]
+            cache[index].translation = translator->template Translate<verb>(address);
+        return cache[index].translation;
     }
 };

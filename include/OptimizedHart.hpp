@@ -11,7 +11,6 @@
 #include <Decoders/PrecomputedDecoder.hpp>
 #include <Translators/CacheWrappedTranslator.hpp>
 
-
 // TODO accelerated WFI states?
 template<
     typename XLEN_t,
@@ -35,36 +34,12 @@ private:
     TranslatingTransactor<XLEN_t, false> memVATransactor;
     PrecomputedDecoder<XLEN_t> decoder;
 
-    struct BasicBlock {
-
-        struct CachedInstruction {
-            __uint32_t encoding = 0;
-            DecodedInstruction<XLEN_t> instruction = nullptr;
-        };
-
-        XLEN_t pc = 0;
-        unsigned int length = 0;
-        CachedInstruction instructions[maxBasicBlockLength];
-
-        BasicBlock* possibleNextBlocks[numNextBlocks] = { nullptr };
-        
-        BasicBlock* GetNextBlock(XLEN_t blockStartPC) {
-            for (unsigned int i = 0; i < numNextBlocks; i++) {
-                if (possibleNextBlocks[i] != nullptr &&
-                    possibleNextBlocks[i]->pc == blockStartPC) {
-                    return possibleNextBlocks[i];
-                }
-            }
-            return nullptr;
-        }
-
+    struct SimplyCachedInstruction {
+        XLEN_t full_pc;
+        __uint32_t encoding = 0;
+        DecodedInstruction<XLEN_t> instruction = nullptr;
     };
-    
-    static constexpr unsigned int cachedBasicBlocks = 1 << bbCacheSizePoT; // Tied to the hash alg
-    BasicBlock* RootBBCache[cachedBasicBlocks];
-    BasicBlock* currentBasicBlock = nullptr;
-    bool bbCacheIsWritingBlock = false;
-    bool trapTakenDuringInstruction = false;
+    SimplyCachedInstruction icache[0x10000];
 
 public:
 
@@ -84,100 +59,35 @@ public:
     };
 
     virtual inline unsigned int Tick() override {
-
-        trapTakenDuringInstruction = false;
-
-        if (!bbCacheIsWritingBlock) [[likely]] {
-
-            if (currentBasicBlock != nullptr) {
-                // Search in the next-block cache. This is the fastest path.
-                BasicBlock* nextBlock = currentBasicBlock->GetNextBlock(this->state.pc);
-                if (nextBlock != nullptr) {
-                    currentBasicBlock = nextBlock;
-                    ExecuteBasicBlock(currentBasicBlock);
-                    return currentBasicBlock->length;
+        for (unsigned int i = 0; i < 10000; i++) {
+            SimplyCachedInstruction inst = icache[(this->state.pc >> 1) & 0xffff];
+            if (inst.full_pc == this->state.pc) [[ likely ]] {
+                inst.instruction(inst.encoding, &this->state, &busVATransactor);
+            } else {
+                __uint32_t encoding;
+                Transaction<XLEN_t> transaction;
+                if constexpr (SkipBusForFetches) {
+                    transaction = memVATransactor.Fetch(this->state.pc, sizeof(encoding), (char*)&encoding);
+                } else {
+                    transaction = busVATransactor.Fetch(this->state.pc, sizeof(encoding), (char*)&encoding);
+                }
+                if (transaction.trapCause == RISCV::TrapCause::NONE) {
+                    DecodedInstruction<XLEN_t> decoded = decoder.Decode(encoding);
+                    icache[(this->state.pc >> 1) & 0xffff] = { this->state.pc, encoding, decoded };
+                    decoded(encoding, &this->state, &busVATransactor);
+                } else {
+                    this->state.RaiseException(transaction.trapCause, this->state.pc);
                 }
             }
-
-            unsigned int rootCacheIndex = (this->state.pc >> 1) & ((1 << bbCacheSizePoT) - 1);
-            if (RootBBCache[rootCacheIndex] != nullptr && RootBBCache[rootCacheIndex]->pc == this->state.pc) {
-                if (currentBasicBlock != nullptr) {
-                    for (unsigned int i = 0; i < numNextBlocks; i++) {
-                        if (currentBasicBlock->possibleNextBlocks[i] == nullptr) {
-                            currentBasicBlock->possibleNextBlocks[i] = RootBBCache[rootCacheIndex];
-                            break;
-                        }
-                    }
-                    // TODO what if we get here and can't have connected the block?
-                    // Oh well, I guess!
-                }
-                currentBasicBlock = RootBBCache[rootCacheIndex];
-                ExecuteBasicBlock(currentBasicBlock);
-                return currentBasicBlock->length;
-            }
-            
-            if (RootBBCache[rootCacheIndex] != nullptr) {
-                // Uh oh. Not only erase the block but all references to it in OTHER blocks...
-                // If this starts happening a lot the fix is to add sub-caches under the index to resolve collisions
-                // Another thing to do could be to speed up eviction by maintaining a bit matrix to find referrers faster
-                for (unsigned int i = 0; i < cachedBasicBlocks; i++) {
-                    if (RootBBCache[i] == nullptr) {
-                        continue;
-                    }
-                    for (unsigned int j = 0; j < numNextBlocks; j++) {
-                        if (RootBBCache[i]->possibleNextBlocks[j] == RootBBCache[rootCacheIndex]) {
-                            RootBBCache[i]->possibleNextBlocks[j] = nullptr;
-                        }
-                    }
-                }
-                delete RootBBCache[rootCacheIndex];
-                RootBBCache[rootCacheIndex] = nullptr;
-            }
-
-            RootBBCache[rootCacheIndex] = new BasicBlock;
-
-            if (currentBasicBlock != nullptr) {
-                for (unsigned int i = 0; i < numNextBlocks; i++) {
-                    if (currentBasicBlock->possibleNextBlocks[i] == nullptr) {
-                        currentBasicBlock->possibleNextBlocks[i] = RootBBCache[rootCacheIndex];
-                        break;
-                    }
-                }
-                // TODO what if we get here and can't have connected the block?
-                // Oh well, I guess!
-            }
-
-            currentBasicBlock = RootBBCache[rootCacheIndex];
-            currentBasicBlock->length = 0;
-            currentBasicBlock->pc = this->state.pc;
-            bbCacheIsWritingBlock = true;
         }
-
-        __uint32_t encoding;
-        Transaction<XLEN_t> transaction;
-        if constexpr (SkipBusForFetches) {
-            transaction = memVATransactor.Fetch(this->state.pc, sizeof(encoding), (char*)&encoding);
-        } else {
-            transaction = busVATransactor.Fetch(this->state.pc, sizeof(encoding), (char*)&encoding);
-        }
-
-        if (transaction.trapCause == RISCV::TrapCause::NONE) [[likely]] {
-            DecodedInstruction<XLEN_t> decoded = decoder.Decode(encoding);
-            currentBasicBlock->instructions[currentBasicBlock->length++] = { encoding, decoded };
-            bbCacheIsWritingBlock = currentBasicBlock->length < maxBasicBlockLength && !instructionCanBranch(decoded);
-            decoded(encoding, &this->state, &busVATransactor);
-            return 1;
-        } 
-
-        this->state.RaiseException(transaction.trapCause, this->state.pc);
-        return 1;
+        return 10000;
     };
 
     virtual inline void Reset() override {
         this->state.Reset(this->resetVector);
         cachedTranslator.Clear();
         decoder.Configure(&this->state);
-        ClearBlockCache();
+        memset(icache, 0, sizeof(icache));
     };
 
     virtual inline Transactor<XLEN_t>* getVATransactor() override {
@@ -185,13 +95,6 @@ public:
     }
 
 private:
-
-    inline void ExecuteBasicBlock(BasicBlock* block) {
-        // TODO maybe pick up speed by modeling trapTakenDuringInstruction with C++ try/catch instead of a flag to check
-        for (unsigned int i = 0; i < block->length && !trapTakenDuringInstruction; i++) {
-            block->instructions[i].instruction(block->instructions[i].encoding, &this->state, &busVATransactor);
-        }
-    }
 
     static inline bool instructionCanBranch(DecodedInstruction<XLEN_t> instruction) {
         // TODO, maybe some of these aren't 100% necessarily basic-block-breakers
@@ -215,37 +118,15 @@ private:
         );
     }
 
-    inline void ClearBlockCache() {
-        bbCacheIsWritingBlock = false;
-        for (unsigned int i = 0; i < cachedBasicBlocks; i++) {
-            if (RootBBCache[i] == nullptr) {
-                continue;
-            }
-            delete RootBBCache[i];
-            RootBBCache[i] = nullptr;
-        }
-    }
-
     inline void Callback(HartCallbackArgument arg) {
-
-        if (arg == HartCallbackArgument::TookTrap) {
-            trapTakenDuringInstruction = true;
-            return;
-        }
-
-        // TODO be strict about these
-
         if (arg == HartCallbackArgument::RequestedVMfence)
             cachedTranslator.Clear();
-
         if (arg == HartCallbackArgument::RequestedIfence || arg == HartCallbackArgument::RequestedVMfence)
-            ClearBlockCache();
-
-        // TODO Operating XLEN changing also changes this.
-        // TODO cut out work by giving me old & new MISA values etc?
-        if (arg == HartCallbackArgument::ChangedMISA)
+            memset(icache, 0, sizeof(icache));
+        if (arg == HartCallbackArgument::ChangedMISA) {
+            memset(icache, 0, sizeof(icache));
             decoder.Configure(&this->state);
-            
+        }
         return;
     }
 
